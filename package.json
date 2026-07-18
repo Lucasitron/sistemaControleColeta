@@ -9,7 +9,7 @@
     "bot:manual": "node enquete_copa_fablab.js --manual",
     "bot:browser": "node enquete_copa_fablab.js --browser",
     "bot:clear": "node enquete_copa_fablab.js --limpar",
-    "check": "find src -name '*.js' -print -exec node --check {} \\; && node --check enquete_copa_fablab.js && node --check cobrancaCopa.js"
+    "check": "find src -name '*.js' -print -exec node --check {} \\; && node --check enquete_copa_fablab.js"
   },
   "keywords": [
     "whatsapp",

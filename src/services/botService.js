@@ -49,6 +49,7 @@ async function listGroupParticipants(groupId) {
 
 async function sendIndividualCharge(data) {
     const { bot } = await getConfiguredBot();
+    ensureBotReady(bot);
     await bot.enviarCobrancaIndividual(data);
     return { ok: true, message: 'Cobranca individual enviada.' };
 }
@@ -82,6 +83,7 @@ async function sendReport(month) {
 
 async function clearSession() {
     const { bot } = await getConfiguredBot();
+    ensureBotReady(bot);
     await bot.limparSessao();
     await resetBot();
     return { ok: true };

@@ -28,11 +28,15 @@ async function runAutomaticCharge(sentDates) {
 
     for (const participant of pending) {
         if (participant.whatsappNumber) {
-            await bot.enviarCobrancaIndividual({
-                number: participant.whatsappNumber,
-                name: participant.name,
-                amountDue: participant.amountDue
-            });
+            try {
+                await bot.enviarCobrancaIndividual({
+                    number: participant.whatsappNumber,
+                    name: participant.name,
+                    amountDue: participant.amountDue
+                });
+            } catch (error) {
+                console.error(`[Auto-Cobranca] Erro ao cobrar ${participant.name}:`, error.message);
+            }
             await wait(2000);
         }
     }

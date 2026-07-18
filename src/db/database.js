@@ -16,6 +16,7 @@ class Database {
     constructor() {
         ensureDataDir();
         this.db = new sqlite3.Database(DB_PATH);
+        this.db.run('PRAGMA foreign_keys = ON');
     }
 
     run(sql, params = []) {
@@ -513,21 +514,24 @@ class Database {
         const targetDate = monthParam ? new Date(`${monthParam}-01T12:00:00Z`) : new Date();
         const monthYearStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
         
-        const monthStart = new Date(targetDate.getFullYear(), targetDate.getMonth(), 1).toISOString();
-        const nextMonth = new Date(targetDate.getFullYear(), targetDate.getMonth() + 1, 1).toISOString();
+        const monthStart = `${monthYearStr}-01T00:00:00.000Z`;
+        const [yearNum, monthNum] = monthYearStr.split('-').map(Number);
+        const nextM = monthNum === 12 ? 1 : monthNum + 1;
+        const nextY = monthNum === 12 ? yearNum + 1 : yearNum;
+        const monthEnd = `${nextY}-${String(nextM).padStart(2, '0')}-01T00:00:00.000Z`;
 
         const totalRow = await this.get(
             `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
              FROM payments
              WHERE paid_at >= ? AND paid_at < ?`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
 
         const purchasesRow = await this.get(
             `SELECT COALESCE(SUM(amount), 0) AS total
              FROM purchases
              WHERE purchase_date >= ? AND purchase_date < ?`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
 
         const purchases = await this.all(
@@ -535,7 +539,7 @@ class Database {
              FROM purchases
              WHERE purchase_date >= ? AND purchase_date < ?
              ORDER BY purchase_date DESC`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
 
         const payments = await this.all(
@@ -548,7 +552,7 @@ class Database {
              FROM payments
              WHERE paid_at >= ? AND paid_at < ?
              ORDER BY paid_at DESC, id DESC`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
 
         const paidRanking = await this.all(
@@ -559,7 +563,7 @@ class Database {
              WHERE paid_at >= ? AND paid_at < ?
              GROUP BY COALESCE(participant_id, participant_name), participant_name
              ORDER BY total DESC, participant_name ASC`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
 
         // Find pending participants dynamically for the selected month
@@ -570,7 +574,7 @@ class Database {
             `SELECT DISTINCT participant_id 
              FROM payments 
              WHERE paid_at >= ? AND paid_at < ? AND participant_id IS NOT NULL`,
-            [monthStart, nextMonth]
+            [monthStart, monthEnd]
         );
         const paidParticipantIds = new Set(paymentsInMonth.map(p => p.participant_id));
 

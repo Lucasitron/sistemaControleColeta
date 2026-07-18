@@ -37,10 +37,6 @@ class ColetaCopaBot {
                 clientId: 'coleta-copa-bot',
                 dataPath: this.sessionDir
             }),
-            webVersionCache: {
-                type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
-            },
             puppeteer: {
                 headless: this.headless,
                 args: [
@@ -458,7 +454,7 @@ class ColetaCopaBot {
         this.isCampaignRunning = true;
 
         try {
-            await grupo.sendSeen();
+            try { await grupo.sendSeen(); } catch (_) { /* grupo pode não suportar sendSeen */ }
             await new Promise(resolve => setTimeout(resolve, 2000));
 
             await grupo.sendMessage(`*COPA FABLAB - CAMPANHA DE COLETA*

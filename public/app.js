@@ -118,13 +118,13 @@ function fillSettings(settings) {
     document.querySelector('#maxOpcoesPorEnquete').value = settings.maxOpcoesPorEnquete || 10;
     
     let valoresText = settings.valoresContribuicao || [];
-    if(Array.isArray(valoresText)) valoresText = valoresText.join(', ');
+    if(Array.isArray(valoresText)) valoresText = valoresText.join('; ');
     document.querySelector('#valoresContribuicao').value = valoresText;
 }
 
 function readSettingsPayload() {
     const valores = document.querySelector('#valoresContribuicao').value
-        .split(',')
+        .split(';')
         .map(value => value.trim())
         .filter(Boolean);
 
@@ -237,8 +237,11 @@ function renderPendingPayments() {
         return;
     }
     
-    const valoresStr = document.querySelector('#valoresContribuicao').value || '10, 20';
-    const values = valoresStr.split(',').map(v => Number(v.replace(/[^0-9.-]+/g,""))).filter(v => v > 0);
+    const valoresStr = document.querySelector('#valoresContribuicao').value || '10; 20';
+    const values = valoresStr.split(';').map(v => {
+        const cleaned = v.replace(/[R$\s.]/g, '').replace(',', '.').trim();
+        return Number(cleaned);
+    }).filter(v => v > 0);
     if (!values.length) values.push(10); 
     
     container.innerHTML = pending.map(p => {
@@ -482,13 +485,13 @@ async function importGroupContacts() {
 
 function formatDate(value) {
     if (!value) return '-';
-    return new Date(value).toLocaleDateString('pt-BR');
+    const [y, m, d] = value.substring(0, 10).split('-');
+    return `${d}/${m}/${y}`;
 }
 
 function dateInputValue(value) {
     if (!value) return '';
-    const date = new Date(value);
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+    return value.substring(0, 10);
 }
 
 function resetPurchaseForm() {
