@@ -1,0 +1,29 @@
+{
+  "name": "cobrancacopa",
+  "version": "1.0.0",
+  "description": "Painel local para gerenciar a Copa FabLab, cobranças e campanhas via WhatsApp.",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "bot": "node enquete_copa_fablab.js",
+    "bot:manual": "node enquete_copa_fablab.js --manual",
+    "bot:browser": "node enquete_copa_fablab.js --browser",
+    "bot:clear": "node enquete_copa_fablab.js --limpar",
+    "check": "find src -name '*.js' -print -exec node --check {} \\; && node --check enquete_copa_fablab.js && node --check cobrancaCopa.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "copa",
+    "fablab"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.2.1",
+    "puppeteer": "^24.34.0",
+    "qrcode": "^1.5.4",
+    "qrcode-terminal": "^0.12.0",
+    "sqlite3": "^6.0.1",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}

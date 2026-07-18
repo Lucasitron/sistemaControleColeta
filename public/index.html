@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Copa FabLab</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    <link rel="stylesheet" href="/styles.css?v=20260706-2">
+</head>
+<body>
+    <div class="app-shell">
+        <aside class="sidebar">
+            <div>
+                <p class="eyebrow"><i class="ph-fill ph-crown"></i> Gestor</p>
+                <h1>Copa FabLab</h1>
+                <p class="sidebar-copy">Painel de arrecadação, devedores e cobranças pelo WhatsApp.</p>
+            </div>
+
+            <nav class="nav-list" aria-label="Navegação">
+                <a href="#dashboard" class="nav-item active"><i class="ph ph-squares-four"></i> Dashboard</a>
+                <a href="#caixa" class="nav-item"><i class="ph ph-coin"></i> Caixa & Despesas</a>
+                <a href="#participantes" class="nav-item"><i class="ph ph-users"></i> Participantes</a>
+                <a href="#relatorios" class="nav-item"><i class="ph ph-whatsapp-logo"></i> Relatórios</a>
+                <a href="#configuracoes" class="nav-item"><i class="ph ph-gear"></i> Config</a>
+            </nav>
+        </aside>
+
+        <main class="content">
+            <section id="dashboard" class="hero-band glass-panel">
+                <div class="hero-text">
+                    <div class="month-navigation">
+                        <button id="prevMonth" class="glass-btn"><i class="ph ph-caret-left"></i></button>
+                        <p class="eyebrow"><i class="ph-fill ph-calendar-blank"></i> <span id="monthDisplay">Mês atual</span></p>
+                        <button id="nextMonth" class="glass-btn"><i class="ph ph-caret-right"></i></button>
+                    </div>
+                    <h2>Dashboard da Copa</h2>
+                    <p class="muted">Acompanhe o caixa do mês selecionado, veja as compras e pendências.</p>
+                </div>
+
+                <div class="status-panel glass-panel neon-border">
+                    <div class="status-header">
+                        <span id="statusBadge" class="status-badge"><i class="ph ph-spinner ph-spin"></i> Carregando</span>
+                        <p id="statusDetails" class="muted">Consultando backend...</p>
+                    </div>
+                    <div id="qrPanel" class="qr-panel" hidden>
+                        <img id="whatsappQr" alt="QR Code do WhatsApp">
+                    </div>
+                    <div id="botLogs" class="bot-logs"></div>
+                    <div class="button-row">
+                        <button id="startWhatsapp" class="primary"><i class="ph ph-whatsapp-logo"></i> Iniciar WhatsApp</button>
+                        <button id="sendCampaign" class="glass-btn"><i class="ph ph-paper-plane-tilt"></i> Nova Campanha</button>
+                    </div>
+                </div>
+            </section>
+
+            <section class="metrics-grid" aria-label="Resumo financeiro">
+                <article class="metric-card highlight glass-panel">
+                    <div class="metric-icon"><i class="ph ph-wallet"></i></div>
+                    <div class="metric-info">
+                        <span>Arrecadado no mês</span>
+                        <strong id="monthCollected">R$ 0,00</strong>
+                        <small id="monthPayments">0 pagamentos registrados</small>
+                    </div>
+                </article>
+                <article class="metric-card glass-panel alert">
+                    <div class="metric-icon"><i class="ph ph-shopping-cart"></i></div>
+                    <div class="metric-info">
+                        <span>Despesas no mês</span>
+                        <strong id="monthPurchases">R$ 0,00</strong>
+                        <small>Total em compras</small>
+                    </div>
+                </article>
+                <article class="metric-card glass-panel" id="balanceCard">
+                    <div class="metric-icon"><i class="ph ph-scales"></i></div>
+                    <div class="metric-info">
+                        <span>Saldo Líquido</span>
+                        <strong id="monthBalance">R$ 0,00</strong>
+                        <small>Disponível do mês</small>
+                    </div>
+                </article>
+                <article class="metric-card glass-panel alert">
+                    <div class="metric-icon"><i class="ph ph-warning-circle"></i></div>
+                    <div class="metric-info">
+                        <span>Pendentes</span>
+                        <strong id="totalDebtors">0</strong>
+                        <small>Neste mês</small>
+                    </div>
+                </article>
+            </section>
+
+            <section id="caixa" class="grid two-columns">
+                <section class="panel form-panel glass-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-download-simple"></i> Entradas</p>
+                            <h3>Registrar Arrecadação</h3>
+                        </div>
+                    </div>
+                    <p class="muted">Selecione o valor para confirmar o pagamento no mês exibido no dashboard.</p>
+                    <div id="pendingPaymentsList" class="ranking-list empty-state">
+                        <i class="ph ph-check-circle"></i> Todos já pagaram este mês.
+                    </div>
+                </section>
+
+                <form id="purchaseForm" class="panel form-panel glass-panel" autocomplete="off">
+                    <input type="hidden" id="purchaseId">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-upload-simple"></i> Saídas</p>
+                            <h3 id="purchaseFormTitle">Registrar Despesa</h3>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="danger action-btn"><i class="ph ph-check"></i> Salvar</button>
+                            <button type="button" id="cancelPurchaseEdit" class="glass-btn cancel-btn" title="Cancelar edição" hidden><i class="ph ph-x"></i></button>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>
+                            Descrição da compra
+                            <div class="input-wrapper">
+                                <i class="ph ph-tag"></i>
+                                <input id="purchaseDesc" type="text" placeholder="Café, açúcar, copo..." required>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="inline-fields">
+                        <div class="input-group">
+                            <label>
+                                Valor gasto
+                                <div class="input-wrapper">
+                                    <i class="ph ph-currency-dollar"></i>
+                                    <input id="purchaseAmount" type="number" min="0.01" step="0.01" placeholder="50.00" required>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                Data
+                                <div class="input-wrapper">
+                                    <i class="ph ph-calendar"></i>
+                                    <input id="purchaseDate" type="date">
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </form>
+
+                <section class="panel glass-panel table-panel full-span">
+                    <form id="paymentForm" class="inline-edit-form" autocomplete="off" hidden>
+                        <input type="hidden" id="paymentId">
+                        <div class="input-group">
+                            <label>
+                                Participante
+                                <div class="select-wrapper">
+                                    <select id="paymentParticipant"></select>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                Valor
+                                <div class="input-wrapper">
+                                    <input id="paymentAmount" type="number" min="0.01" step="0.01" required>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                Data
+                                <div class="input-wrapper">
+                                    <input id="paymentDate" type="date" required>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="primary action-btn"><i class="ph ph-check"></i> Salvar</button>
+                            <button type="button" id="cancelPaymentEdit" class="glass-btn cancel-btn" title="Cancelar edição"><i class="ph ph-x"></i></button>
+                        </div>
+                    </form>
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-download-simple"></i> Histórico</p>
+                            <h3>Arrecadações Registradas</h3>
+                        </div>
+                        <span id="paymentCount" class="counter"><i class="ph ph-wallet"></i> 0 arrecadações</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Data</th>
+                                    <th>Participante</th>
+                                    <th>Valor</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="paymentsTable"></tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="panel glass-panel table-panel full-span">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-shopping-cart"></i> Histórico</p>
+                            <h3>Compras Registradas</h3>
+                        </div>
+                        <span id="purchaseCount" class="counter"><i class="ph ph-receipt"></i> 0 compras</span>
+                    </div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Data</th>
+                                    <th>Descrição</th>
+                                    <th>Valor</th>
+                                    <th>Ações</th>
+                                </tr>
+                            </thead>
+                            <tbody id="purchasesTable"></tbody>
+                        </table>
+                    </div>
+                </section>
+            </section>
+
+            <section class="grid two-columns">
+                <section class="panel glass-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-trophy"></i> Resumo do Mês</p>
+                            <h3>Maiores Contribuições</h3>
+                        </div>
+                    </div>
+                    <div id="paidRanking" class="ranking-list empty-state"><i class="ph ph-empty"></i> Sem arrecadações.</div>
+                </section>
+
+                <section class="panel glass-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-warning"></i> Resumo do Mês</p>
+                            <h3>Pendências</h3>
+                        </div>
+                    </div>
+                    <div id="debtorRanking" class="ranking-list empty-state"><i class="ph ph-empty"></i> Sem pendências.</div>
+                </section>
+            </section>
+
+            <section id="relatorios" class="grid two-columns">
+                <form id="chargeForm" class="panel form-panel featured-panel glass-panel neon-border-accent" autocomplete="off">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-whatsapp-logo"></i> WhatsApp</p>
+                            <h3>Cobrança Manual</h3>
+                        </div>
+                        <button type="submit" class="primary action-btn"><i class="ph ph-paper-plane-right"></i> Enviar</button>
+                    </div>
+                    <p class="muted">A cobrança automática ocorre todo dia 10 e 15. Use isto para forçar envio agora.</p>
+                    <div class="input-group">
+                        <label>
+                            Destinatário
+                            <div class="select-wrapper">
+                                <i class="ph ph-users"></i>
+                                <select id="chargeParticipant">
+                                    <option value="todos">Todos os pendentes do mês</option>
+                                </select>
+                            </div>
+                        </label>
+                    </div>
+                </form>
+
+                <section class="panel form-panel glass-panel">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-file-text"></i> Transparência</p>
+                            <h3>Relatório Mensal</h3>
+                        </div>
+                        <button id="btnSendReport" class="primary action-btn"><i class="ph ph-share-network"></i> Enviar no Grupo</button>
+                    </div>
+                    <p class="muted">Gera e envia o resumo financeiro deste mês no grupo alvo configurado (Arrecadado, Compras, Saldo e Devedores).</p>
+                </section>
+            </section>
+
+            <section id="participantes" class="panel glass-panel table-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="eyebrow"><i class="ph-fill ph-address-book"></i> Cadastro</p>
+                        <h3>Participantes</h3>
+                    </div>
+                    <span id="participantCount" class="counter"><i class="ph ph-users"></i> 0 nomes</span>
+                </div>
+
+                <form id="participantForm" class="participant-form" autocomplete="off">
+                    <input type="hidden" id="participantId">
+                    <div class="input-group">
+                        <label>
+                            Nome
+                            <div class="input-wrapper">
+                                <input id="participantName" type="text" required placeholder="Nome do participante">
+                            </div>
+                        </label>
+                    </div>
+                    
+                    <div class="input-group">
+                        <label>
+                            Categoria
+                            <div class="select-wrapper">
+                                <select id="participantCategory">
+                                    <option value="professores">Professor</option>
+                                    <option value="bolsistas">Bolsista</option>
+                                    <option value="usuariosFrequentes">Usuário Frequente</option>
+                                </select>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="input-group">
+                        <label>
+                            WhatsApp
+                            <div class="input-wrapper">
+                                <input id="participantWhatsapp" type="tel" placeholder="5591999999999">
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="input-group">
+                        <label>
+                            Quota Mensal Padrão
+                            <div class="input-wrapper">
+                                <input id="participantAmountDue" type="number" min="0" step="0.01" placeholder="0.00">
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="submit" class="primary action-btn"><i class="ph ph-check"></i> Salvar</button>
+                        <button type="button" id="cancelEdit" class="glass-btn cancel-btn" title="Cancelar"><i class="ph ph-x"></i></button>
+                    </div>
+                </form>
+
+                <div class="toolbar">
+                    <div class="input-group search-group">
+                        <div class="input-wrapper">
+                            <i class="ph ph-magnifying-glass"></i>
+                            <input id="searchParticipants" type="search" placeholder="Filtrar por nome ou WhatsApp">
+                        </div>
+                    </div>
+                    
+                    <div class="input-group filter-group">
+                        <div class="select-wrapper">
+                            <i class="ph ph-funnel"></i>
+                            <select id="categoryFilter">
+                                <option value="todos">Todas as categorias</option>
+                                <option value="professores">Professores</option>
+                                <option value="bolsistas">Bolsistas</option>
+                                <option value="usuariosFrequentes">Usuários frequentes</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Categoria</th>
+                                <th>WhatsApp</th>
+                                <th>Quota (R$)</th>
+                                <th>Status no Mês</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="participantsTable"></tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="grid two-columns">
+                <form id="settingsForm" class="panel form-panel glass-panel" autocomplete="off">
+                    <div class="panel-header">
+                        <div>
+                            <p class="eyebrow"><i class="ph-fill ph-database"></i> Base</p>
+                            <h3 id="configuracoes">Configurações</h3>
+                        </div>
+                        <button type="submit" class="primary action-btn"><i class="ph ph-floppy-disk"></i> Salvar</button>
+                    </div>
+
+                    <div class="input-group">
+                        <label>
+                            Grupo alvo (Relatórios e Campanhas)
+                            <div class="input-wrapper">
+                                <i class="ph ph-users-three"></i>
+                                <input id="grupoAlvo" name="grupoAlvo" type="text" placeholder="Copa_FabLab">
+                            </div>
+                        </label>
+                    </div>
+
+                    <section class="group-tools">
+                        <div class="panel-header compact-header">
+                            <div>
+                                <p class="eyebrow"><i class="ph-fill ph-whatsapp-logo"></i> WhatsApp</p>
+                                <h4>Grupos e contatos</h4>
+                            </div>
+                            <button type="button" id="btnListGroups" class="glass-btn action-btn"><i class="ph ph-list-magnifying-glass"></i> Listar grupos</button>
+                        </div>
+
+                        <div class="inline-fields">
+                            <div class="input-group">
+                                <label>
+                                    Grupo encontrado
+                                    <div class="select-wrapper">
+                                        <i class="ph ph-chats-circle"></i>
+                                        <select id="groupSelect">
+                                            <option value="">Conecte o WhatsApp e liste os grupos</option>
+                                        </select>
+                                    </div>
+                                </label>
+                            </div>
+
+                            <div class="input-group">
+                                <label>
+                                    Categoria ao importar
+                                    <div class="select-wrapper">
+                                        <i class="ph ph-tag"></i>
+                                        <select id="importCategory">
+                                            <option value="usuariosFrequentes">Usuários frequentes</option>
+                                            <option value="bolsistas">Bolsistas</option>
+                                            <option value="professores">Professores</option>
+                                        </select>
+                                    </div>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="button-row">
+                            <button type="button" id="btnSelectGroup" class="primary"><i class="ph ph-check-circle"></i> Selecionar grupo</button>
+                            <button type="button" id="btnLoadGroupContacts" class="glass-btn"><i class="ph ph-address-book"></i> Carregar contatos</button>
+                            <button type="button" id="btnImportGroupContacts" class="glass-btn"><i class="ph ph-user-plus"></i> Importar contatos</button>
+                        </div>
+
+                        <div id="groupContactsPreview" class="contacts-preview empty-state">
+                            <i class="ph ph-users"></i> Nenhum contato carregado.
+                        </div>
+                    </section>
+
+                    <div class="input-group">
+                        <label>
+                            Chave PIX
+                            <div class="input-wrapper">
+                                <i class="ph ph-key"></i>
+                                <input id="pixChave" name="pixChave" type="text">
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="input-group">
+                        <label>
+                            PIX Copia e Cola
+                            <div class="textarea-wrapper">
+                                <textarea id="pixCopiaCola" name="pixCopiaCola" rows="4"></textarea>
+                            </div>
+                        </label>
+                    </div>
+
+                    <div class="inline-fields">
+                        <div class="input-group">
+                            <label>
+                                Opções por enquete
+                                <div class="input-wrapper">
+                                    <i class="ph ph-list-numbers"></i>
+                                    <input id="maxOpcoesPorEnquete" name="maxOpcoesPorEnquete" type="number" min="2" max="12">
+                                </div>
+                            </label>
+                        </div>
+
+                        <div class="input-group">
+                            <label>
+                                Valores Enquete
+                                <div class="input-wrapper">
+                                    <i class="ph ph-coins"></i>
+                                    <input id="valoresContribuicao" name="valoresContribuicao" type="text" placeholder="R$ 10,00, R$ 12,00">
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                </form>
+            </section>
+        </main>
+    </div>
+
+    <div id="toast" class="toast glass-panel" role="status" aria-live="polite">
+        <i class="ph-fill ph-info"></i>
+        <span class="toast-message"></span>
+    </div>
+
+    <script src="/app.js?v=20260706-2"></script>
+    <script>
+        document.querySelectorAll('.nav-item').forEach(item => {
+            item.addEventListener('click', function() {
+                document.querySelectorAll('.nav-item').forEach(i => i.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>
