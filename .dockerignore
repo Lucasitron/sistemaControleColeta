@@ -1,0 +1,15 @@
+node_modules
+.git
+.gitignore
+.agents
+skills-lock.json
+data/*.sqlite
+data/*.sqlite-*
+.wwebjs_auth
+.wwebjs_auth_nova
+.wwebjs_cache
+extratos
+npm-debug.log*
+Dockerfile
+docker-compose.yml
+.dockerignore

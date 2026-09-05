@@ -1,0 +1,13 @@
+services:
+  app:
+    build: .
+    container_name: cobrancacopa
+    restart: unless-stopped
+    ports:
+      - "1213:1213"
+    volumes:
+      - ./data:/app/data
+      - ./.wwebjs_auth_nova:/app/.wwebjs_auth_nova
+      - ./.wwebjs_cache:/app/.wwebjs_cache
+    environment:
+      - PORT=1213
