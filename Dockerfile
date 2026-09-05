@@ -1,6 +1,8 @@
 FROM node:22-slim
 
 RUN apt-get update && apt-get install -y \
+    python3 \
+    build-essential \
     libnss3 \
     libnspr4 \
     libatk1.0-0 \
@@ -23,12 +25,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_SKIP_DOWNLOAD=false \
+    npm_config_build_from_source=true \
     PORT=1213
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install --omit=dev --build-from-source
 RUN npx puppeteer browsers install chrome
 
 COPY . .
