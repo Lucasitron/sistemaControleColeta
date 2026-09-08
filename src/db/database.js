@@ -223,6 +223,13 @@ class Database {
     }
 
     async updateParticipant(id, data) {
+        const current = await this.getParticipant(id);
+        if (!current) {
+            throw new Error('Participante nao encontrado.');
+        }
+
+        const isDebtor = data.isDebtor !== undefined ? (data.isDebtor ? 1 : 0) : (current.isDebtor ? 1 : 0);
+
         await this.run(
             `UPDATE participants
              SET name = ?,
@@ -234,7 +241,7 @@ class Database {
             [
                 data.name.trim(),
                 data.category,
-                data.isDebtor ? 1 : 0,
+                isDebtor,
                 data.whatsappNumber ? String(data.whatsappNumber).trim() : null,
                 Number(data.amountDue || 0),
                 id

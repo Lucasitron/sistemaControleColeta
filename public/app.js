@@ -306,7 +306,7 @@ function renderParticipants() {
     if (!rows.length) {
         elements.participantsTable.innerHTML = `
             <tr>
-                <td colspan="6" class="empty-state" style="text-align: center;"><i class="ph ph-empty"></i> Nenhum participante encontrado.</td>
+                <td colspan="7" class="empty-state" style="text-align: center;"><i class="ph ph-empty"></i> Nenhum participante encontrado.</td>
             </tr>
         `;
         return;
@@ -320,6 +320,10 @@ function renderParticipants() {
             statusPill = '<span class="pill" style="background:rgba(59, 130, 246, 0.15); color:#60a5fa; border-color:rgba(59, 130, 246, 0.3);"><i class="ph-fill ph-shield-check"></i> Justificado</span>';
         }
 
+        const debtorPill = participant.isDebtor
+            ? '<span class="pill due"><i class="ph-fill ph-warning"></i> Devedor</span>'
+            : '<span class="muted">—</span>';
+
         return `
         <tr>
             <td><strong>${escapeHtml(participant.name)}</strong></td>
@@ -327,8 +331,10 @@ function renderParticipants() {
             <td>${participant.whatsappNumber ? escapeHtml(participant.whatsappNumber) : '<span class="muted">Sem numero</span>'}</td>
             <td>${currency(participant.amountDue)}</td>
             <td>${statusPill}</td>
+            <td>${debtorPill}</td>
             <td class="actions">
                 <button data-action="toggleJustify" data-id="${participant.id}" title="Justificar Ausência neste Mês"><i class="ph ph-shield-check"></i></button>
+                <button data-action="toggleDebtor" data-id="${participant.id}" title="${participant.isDebtor ? 'Remover da lista de devedores' : 'Adicionar à lista de devedores'}"><i class="ph ${participant.isDebtor ? 'ph-check-circle' : 'ph-warning-circle'}"></i></button>
                 <button data-action="edit" data-id="${participant.id}" title="Editar"><i class="ph ph-pencil-simple"></i></button>
                 <button class="danger" data-action="delete" data-id="${participant.id}" title="Excluir"><i class="ph ph-trash"></i></button>
             </td>
@@ -523,6 +529,7 @@ function resetParticipantForm() {
     document.querySelector('#participantCategory').value = 'professores';
     document.querySelector('#participantWhatsapp').value = '';
     document.querySelector('#participantAmountDue').value = '';
+    document.querySelector('#participantIsDebtor').checked = false;
 }
 
 function editParticipant(id) {
@@ -534,6 +541,7 @@ function editParticipant(id) {
     document.querySelector('#participantCategory').value = participant.category;
     document.querySelector('#participantWhatsapp').value = participant.whatsappNumber || '';
     document.querySelector('#participantAmountDue').value = participant.amountDue || '';
+    document.querySelector('#participantIsDebtor').checked = Boolean(participant.isDebtor);
     document.querySelector('#participantName').focus();
     document.querySelector('#participantes').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -757,7 +765,8 @@ elements.participantForm.addEventListener('submit', async (event) => {
         name: document.querySelector('#participantName').value,
         category: document.querySelector('#participantCategory').value,
         whatsappNumber: document.querySelector('#participantWhatsapp').value,
-        amountDue: document.querySelector('#participantAmountDue').value
+        amountDue: document.querySelector('#participantAmountDue').value,
+        isDebtor: document.querySelector('#participantIsDebtor').checked
     };
 
     await withLoading(event.submitter, 'Salvando...', () => api(id ? `/api/participants/${id}` : '/api/participants', {
@@ -775,12 +784,38 @@ document.querySelector('#cancelPurchaseEdit').addEventListener('click', resetPur
 document.querySelector('#searchParticipants').addEventListener('input', renderParticipants);
 document.querySelector('#categoryFilter').addEventListener('change', renderParticipants);
 
+window.toggleDebtor = async function(participantId) {
+    const participant = state.participants.find(p => p.id === Number(participantId));
+    if (!participant) return;
+
+    try {
+        await api(`/api/participants/${participantId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                name: participant.name,
+                category: participant.category,
+                whatsappNumber: participant.whatsappNumber || '',
+                amountDue: participant.amountDue || 0,
+                isDebtor: !participant.isDebtor
+            })
+        });
+        showToast(participant.isDebtor ? 'Removido da lista de devedores.' : 'Adicionado à lista de devedores.');
+        await refreshDashboard();
+    } catch (err) {
+        showToast(err.message);
+    }
+};
+
 elements.participantsTable.addEventListener('click', async (event) => {
     const button = event.target.closest('button');
     if (!button) return;
 
     if (button.dataset.action === 'toggleJustify') {
         window.toggleJustify(button.dataset.id);
+    }
+
+    if (button.dataset.action === 'toggleDebtor') {
+        window.toggleDebtor(button.dataset.id);
     }
 
     if (button.dataset.action === 'edit') {

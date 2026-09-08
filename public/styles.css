@@ -914,6 +914,22 @@ td.actions button.danger:hover {
     margin-top: -2px;
 }
 
+.checkbox-field {
+    gap: 8px;
+}
+
+.checkbox-field .field-label {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.input-group .checkbox-label {
+    flex-direction: row;
+    gap: 8px;
+    font-size: 0.85rem;
+}
+
 .form-actions {
     display: flex;
     gap: 8px;
