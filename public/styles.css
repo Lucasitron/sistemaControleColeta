@@ -524,6 +524,12 @@ select {
     cursor: pointer;
 }
 
+select option,
+select optgroup {
+    background-color: var(--bg-surface);
+    color: var(--text-main);
+}
+
 /* Custom Select Arrow using Icon - we use background for native look if needed or just let it be */
 
 /* Buttons */
