@@ -2,6 +2,8 @@ const db = require('../db/database');
 const { getBot } = require('./botManager');
 
 const CHECK_INTERVAL_MS = 30 * 1000;
+const READY_WAIT_MS = 90 * 1000;
+const READY_POLL_MS = 2000;
 
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
@@ -56,11 +58,7 @@ async function sendReminderNow(id) {
 async function dispatchReminder(reminder) {
     const config = await db.getBotConfig();
     const bot = getBot(config);
-    if (!bot.getStatus().isReady) {
-        const error = new Error('WhatsApp ainda nao esta pronto. Clique em Iniciar WhatsApp e escaneie o QR Code.');
-        error.statusCode = 409;
-        throw error;
-    }
+    await ensureBotReadyForSend(bot);
     const target = resolveTarget(reminder, config.grupoAlvo);
     if (!target) {
         throw new Error('Nenhum grupo definido para o lembrete. Selecione o grupo de envio.');
@@ -71,6 +69,29 @@ async function dispatchReminder(reminder) {
     await bot.enviarMensagemGrupo(target, reminder.message.trim());
     const label = reminder.title ? `"${reminder.title}"` : reminder.slot;
     console.log(`[Lembretes] Enviado ${label} (${reminder.time}) para "${reminder.groupName || target}".`);
+}
+
+async function ensureBotReadyForSend(bot) {
+    if (bot.getStatus().isReady) {
+        return;
+    }
+    console.log('[Lembretes] WhatsApp nao esta pronto. Iniciando antes do envio...');
+    try {
+        await bot.iniciar();
+    } catch (error) {
+        console.log(`[Lembretes] Falha ao iniciar WhatsApp: ${error.message}`);
+    }
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < READY_WAIT_MS) {
+        if (bot.getStatus().isReady) {
+            console.log('[Lembretes] WhatsApp pronto para envio.');
+            return;
+        }
+        await new Promise(resolve => setTimeout(resolve, READY_POLL_MS));
+    }
+    const error = new Error('WhatsApp ainda nao esta pronto. Clique em Iniciar WhatsApp, escaneie o QR Code e tente novamente.');
+    error.statusCode = 409;
+    throw error;
 }
 
 async function runReminderCheck(sentKeys, now = new Date()) {
@@ -91,7 +112,7 @@ async function runReminderCheck(sentKeys, now = new Date()) {
             sentKeys.add(key);
         } catch (error) {
             if (error.statusCode === 409) {
-                console.log(`[Lembretes] WhatsApp offline, pulando ${reminder.time} (tenta no proximo minuto).`);
+                console.log(`[Lembretes] WhatsApp indisponivel para ${reminder.time}. Sera tentado no proximo horario agendado.`);
             } else {
                 console.error(`[Lembretes] Erro ao enviar ${reminder.time}:`, error.message);
                 sentKeys.add(`${key}:erro:${Date.now()}`);
@@ -102,13 +123,20 @@ async function runReminderCheck(sentKeys, now = new Date()) {
 
 function startReminderJob() {
     const sentKeys = new Set();
+    let running = false;
     console.log('[Lembretes] Agendador iniciado (horarios e dias configuraveis pela interface).');
     return setInterval(async () => {
+        if (running) {
+            return;
+        }
+        running = true;
         try {
             if (sentKeys.size > 500) sentKeys.clear();
             await runReminderCheck(sentKeys);
         } catch (error) {
             console.error('[Lembretes] Erro no job:', error.message);
+        } finally {
+            running = false;
         }
     }, CHECK_INTERVAL_MS);
 }

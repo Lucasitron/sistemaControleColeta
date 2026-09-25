@@ -440,11 +440,19 @@ function reminderGroupOptions(selectedId, selectedName) {
         options.push(`<option value="${escapeHtml(group.id)}" data-name="${escapeHtml(group.name)}"${selected ? ' selected' : ''}>${escapeHtml(group.name)}</option>`);
     }
     if (selectedId && !seen.has(selectedId)) {
-        options.push(`<option value="${escapeHtml(selectedId)}" selected>${escapeHtml(selectedName || selectedId)} (salvo)</option>`);
+        options.push(`<option value="${escapeHtml(selectedId)}" data-name="${escapeHtml(selectedName || '')}" selected>${escapeHtml(selectedName || selectedId)} (salvo)</option>`);
     } else if (!selectedId && selectedName) {
-        options.push(`<option value="" selected>Grupo da coleta (padrão) · salvo: ${escapeHtml(selectedName)}</option>`);
+        options.push(`<option value="" data-name="${escapeHtml(selectedName)}" selected>Grupo da coleta (padrão) · salvo: ${escapeHtml(selectedName)}</option>`);
     }
     return options.join('');
+}
+
+function reminderDestinationLabel(reminder) {
+    if (reminder.groupId) {
+        const known = state.groups.find(g => g.id === reminder.groupId);
+        return known ? known.name : (reminder.groupName || reminder.groupId);
+    }
+    return 'Grupo da coleta';
 }
 
 function weekdayCheckboxesHtml(selectedDays, fieldName) {
@@ -463,6 +471,8 @@ async function loadReminders() {
 }
 
 function refreshReminderGroupSelects() {
+    const container = document.querySelector('#remindersList');
+    if (container) container.classList.toggle('has-groups', state.groups.length > 0);
     const formSelect = document.querySelector('#reminderFormGroup');
     if (formSelect) {
         const current = formSelect.value;
@@ -491,6 +501,7 @@ function renderReminders() {
     if (formSelect && !formSelect.children.length) {
         formSelect.innerHTML = reminderGroupOptions('', '');
     }
+    container.classList.toggle('has-groups', state.groups.length > 0);
 
     if (!state.reminders.length) {
         container.innerHTML = '<div class="empty-state"><i class="ph ph-empty"></i> Nenhum lembrete. Clique em "Novo lembrete" para criar.</div>';
@@ -506,7 +517,7 @@ function renderReminders() {
                     <span class="slider"></span>
                 </label>
             </div>
-            <div class="reminder-meta muted">${escapeHtml(describeDaysShort(reminder.days))}</div>
+            <div class="reminder-meta muted">${escapeHtml(describeDaysShort(reminder.days))} · <i class="ph ph-paper-plane-tilt"></i> ${escapeHtml(reminderDestinationLabel(reminder))}</div>
             <div class="inline-fields">
                 <div class="input-group">
                     <label>Título
@@ -536,6 +547,7 @@ function renderReminders() {
                         <select data-field="groupId">${reminderGroupOptions(reminder.groupId || '', reminder.groupName || '')}</select>
                     </div>
                 </label>
+                <small class="muted groups-hint">Conecte o WhatsApp e clique em "Listar grupos" para escolher um grupo diferente do da coleta.</small>
             </div>
             <div class="input-group">
                 <label>Mensagem do aviso
@@ -557,9 +569,12 @@ function readReminderPayload(scope) {
     const days = [...scope.querySelectorAll('[data-field="days"]:checked')].map(el => Number(el.value));
     const groupSelect = scope.querySelector('[data-field="groupId"]') || scope.querySelector('#reminderFormGroup');
     const groupId = groupSelect ? groupSelect.value : '';
-    const groupName = groupSelect && groupSelect.selectedOptions[0]?.dataset?.name
+    let groupName = groupSelect && groupSelect.selectedOptions[0]?.dataset?.name
         ? groupSelect.selectedOptions[0].dataset.name
         : '';
+    if (groupId && !groupName) {
+        groupName = state.groups.find(g => g.id === groupId)?.name || '';
+    }
     const titleEl = scope.querySelector('[data-field="title"]') || scope.querySelector('#reminderFormTitle');
     const timeEl = scope.querySelector('[data-field="time"]') || scope.querySelector('#reminderFormTime');
     const messageEl = scope.querySelector('[data-field="message"]') || scope.querySelector('#reminderFormMessage');
