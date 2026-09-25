@@ -119,6 +119,30 @@ class Database {
             )
         `);
 
+        await this.run(`
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot TEXT NOT NULL UNIQUE,
+                title TEXT NOT NULL DEFAULT '',
+                time TEXT NOT NULL,
+                days TEXT NOT NULL DEFAULT '1,2,3,4,5',
+                message TEXT NOT NULL DEFAULT '',
+                group_id TEXT NOT NULL DEFAULT '',
+                group_name TEXT NOT NULL DEFAULT '',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        await this.ensureColumn('reminders', 'title', "TEXT NOT NULL DEFAULT ''");
+        await this.ensureColumn('reminders', 'days', "TEXT NOT NULL DEFAULT '1,2,3,4,5'");
+        await this.ensureColumn('reminders', 'group_id', "TEXT NOT NULL DEFAULT ''");
+        await this.ensureColumn('reminders', 'group_name', "TEXT NOT NULL DEFAULT ''");
+        await this.ensureColumn('reminders', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+        await this.ensureColumn('reminders', 'updated_at', 'TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP');
+
+        await this.seedReminders();
+
         await this.seedDefaults();
     }
 
@@ -252,6 +276,212 @@ class Database {
 
     async deleteParticipant(id) {
         return await this.run('DELETE FROM participants WHERE id = ?', [id]);
+    }
+
+    normalizeReminderDays(value, fallback = '1,2,3,4,5') {
+        let list = value;
+        if (typeof list === 'string') {
+            list = list.split(',').map(v => v.trim()).filter(v => v !== '');
+        }
+        if (!Array.isArray(list)) return fallback;
+        const days = [...new Set(
+            list.map(Number).filter(n => Number.isInteger(n) && n >= 0 && n <= 6)
+        )].sort((a, b) => a - b);
+        if (!days.length) {
+            throw new Error('Selecione ao menos um dia da semana.');
+        }
+        return days.join(',');
+    }
+
+    validateReminderTime(time) {
+        const value = String(time || '').trim();
+        if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+            throw new Error('Horario invalido. Use o formato HH:MM (ex: 09:00).');
+        }
+        return value;
+    }
+
+    mapReminderRow(row) {
+        if (!row) return row;
+        return {
+            ...row,
+            days: String(row.days || '1,2,3,4,5').split(',').map(Number).filter(n => Number.isInteger(n)),
+            enabled: Boolean(row.enabled)
+        };
+    }
+
+    async seedReminders() {
+        const defaults = [
+            {
+                slot: 'manha',
+                title: 'Lembrete da manhã',
+                time: '09:00',
+                days: '1,2,3,4,5',
+                message: `☕ *BOM DIA, COPA FABLAB!*\n\nLembrete da manhã: quem ainda não contribuiu este mês, aproveite para fazer o PIX e garantir os insumos da nossa copa. 🙏\n\n_Equipe Copa FabLab_`,
+                group_id: '',
+                group_name: '',
+                enabled: 1
+            },
+            {
+                slot: 'meio-dia',
+                title: 'Lembrete do almoço',
+                time: '12:00',
+                days: '1,2,3,4,5',
+                message: `🍽️ *HORA DO ALMOÇO - LEMBRETE DA COPA*\n\nPassando para lembrar: sua contribuição mantém café, açúcar e descartáveis sempre disponíveis.\n\nQuem já pagou, obrigado! Quem ainda não, bora contribuir? 💚`,
+                group_id: '',
+                group_name: '',
+                enabled: 1
+            },
+            {
+                slot: 'tarde',
+                title: 'Lembrete da tarde',
+                time: '14:00',
+                days: '1,2,3,4,5',
+                message: `☕ *LEMBRETE DA TARDE - COPA FABLAB*\n\nBoa tarde! Não esqueça da coleta mensal da copa. Sua participação faz a diferença!\n\nQualquer dúvida, chame no particular.`,
+                group_id: '',
+                group_name: '',
+                enabled: 1
+            },
+            {
+                slot: 'fim-tarde',
+                title: 'Último lembrete do dia',
+                time: '16:50',
+                days: '1,2,3,4,5',
+                message: `🌙 *ÚLTIMO LEMBRETE DO DIA - COPA FABLAB*\n\nEncerrando o dia! Se ainda falta sua contribuição, aproveite para regularizar ainda hoje.\n\nAmanhã tem mais. Obrigado a todos que já contribuíram! 🙌`,
+                group_id: '',
+                group_name: '',
+                enabled: 1
+            }
+        ];
+
+        for (const item of defaults) {
+            await this.run(
+                `INSERT INTO reminders (slot, title, time, days, message, group_id, group_name, enabled)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(slot) DO NOTHING`,
+                [item.slot, item.title, item.time, item.days, item.message, item.group_id, item.group_name, item.enabled]
+            );
+        }
+        await this.run(
+            `UPDATE reminders SET days = '1,2,3,4,5' WHERE days IS NULL OR TRIM(days) = ''`
+        );
+        const titles = {
+            'manha': 'Lembrete da manhã',
+            'meio-dia': 'Lembrete do almoço',
+            'tarde': 'Lembrete da tarde',
+            'fim-tarde': 'Último lembrete do dia'
+        };
+        for (const [slot, title] of Object.entries(titles)) {
+            await this.run(
+                `UPDATE reminders SET title = ? WHERE slot = ? AND (title IS NULL OR TRIM(title) = '')`,
+                [title, slot]
+            );
+        }
+    }
+
+    async getReminders() {
+        const rows = await this.all(
+            `SELECT id,
+                    slot,
+                    title,
+                    time,
+                    days,
+                    message,
+                    group_id AS groupId,
+                    group_name AS groupName,
+                    enabled AS enabled,
+                    updated_at AS updatedAt
+             FROM reminders
+             ORDER BY time ASC, id ASC`
+        );
+        return rows.map(r => this.mapReminderRow(r));
+    }
+
+    async createReminder(data) {
+        const title = String(data.title || '').trim();
+        if (!title) {
+            throw new Error('Informe um titulo para o lembrete.');
+        }
+        const time = this.validateReminderTime(data.time);
+        const days = this.normalizeReminderDays(data.days);
+        const message = String(data.message || '').trim();
+        if (!message) {
+            throw new Error('Mensagem do lembrete esta vazia.');
+        }
+        const slot = `custom-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+        const result = await this.run(
+            `INSERT INTO reminders (slot, title, time, days, message, group_id, group_name, enabled)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                slot,
+                title,
+                time,
+                days,
+                message,
+                String(data.groupId || '').trim(),
+                String(data.groupName || '').trim(),
+                data.enabled === undefined || data.enabled ? 1 : 0
+            ]
+        );
+        return await this.getReminder(result.id);
+    }
+
+    async getReminder(id) {
+        const row = await this.get(
+            `SELECT id, slot, title, time, days, message,
+                    group_id AS groupId, group_name AS groupName,
+                    enabled, updated_at AS updatedAt
+             FROM reminders WHERE id = ?`,
+            [id]
+        );
+        if (!row) {
+            throw new Error('Lembrete nao encontrado.');
+        }
+        return this.mapReminderRow(row);
+    }
+
+    async updateReminder(id, data) {
+        const current = await this.get('SELECT * FROM reminders WHERE id = ?', [id]);
+        if (!current) {
+            throw new Error('Lembrete nao encontrado.');
+        }
+
+        const time = data.time !== undefined
+            ? this.validateReminderTime(data.time)
+            : current.time;
+        const days = data.days !== undefined
+            ? this.normalizeReminderDays(data.days, current.days || '1,2,3,4,5')
+            : (current.days || '1,2,3,4,5');
+        const title = data.title !== undefined ? String(data.title).trim() : (current.title || '');
+        if (!title) {
+            throw new Error('Informe um titulo para o lembrete.');
+        }
+        const message = data.message !== undefined ? String(data.message) : current.message;
+        if (!String(message || '').trim()) {
+            throw new Error('Mensagem do lembrete esta vazia.');
+        }
+        const groupId = data.groupId !== undefined ? String(data.groupId).trim() : (current.group_id || '');
+        const groupName = data.groupName !== undefined ? String(data.groupName).trim() : (current.group_name || '');
+        const enabled = data.enabled !== undefined ? (data.enabled ? 1 : 0) : current.enabled;
+
+        await this.run(
+            `UPDATE reminders
+             SET title = ?, time = ?, days = ?, message = ?,
+                 group_id = ?, group_name = ?, enabled = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [title, time, days, message, groupId, groupName, enabled, id]
+        );
+
+        return await this.getReminder(id);
+    }
+
+    async deleteReminder(id) {
+        const result = await this.run('DELETE FROM reminders WHERE id = ?', [id]);
+        if (!result.changes) {
+            throw new Error('Lembrete nao encontrado.');
+        }
+        return { ok: true };
     }
 
     async getBotConfig() {

@@ -1032,4 +1032,141 @@ td.actions button.danger:hover {
         flex-direction: column;
         align-items: stretch;
     }
+
+    .reminders-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* Lembretes agendados */
+.reminders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+}
+
+.reminder-card {
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.reminder-card.disabled {
+    opacity: 0.6;
+}
+
+.reminder-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.switch {
+    position: relative;
+    display: inline-block;
+    width: 44px;
+    height: 24px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.switch .slider {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    transition: var(--transition-fast);
+}
+
+.switch .slider::before {
+    content: '';
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--text-muted);
+    border-radius: 50%;
+    transition: var(--transition-fast);
+}
+
+.switch input:checked + .slider {
+    background: var(--primary-glow);
+    border-color: var(--primary);
+}
+
+.switch input:checked + .slider::before {
+    transform: translate(18px, -50%);
+    background: var(--primary);
+}
+
+/* Gerenciador de lembretes */
+.reminder-form {
+    padding: 18px;
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.reminder-form[hidden] {
+    display: none;
+}
+
+.reminder-meta {
+    font-size: 0.85rem;
+}
+
+.weekday-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.weekday-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    transition: var(--transition-fast);
+    user-select: none;
+}
+
+.weekday-check input {
+    accent-color: var(--primary);
+}
+
+.weekday-check.checked {
+    color: var(--text-main);
+    border-color: var(--primary);
+    background: var(--primary-glow);
+}
+
+.weekday-shortcuts {
+    margin-top: 8px;
+}
+
+.reminder-actions {
+    flex-wrap: wrap;
+}
+
+.danger-ghost {
+    color: var(--warning);
+    border-color: rgba(239, 68, 68, 0.35);
 }

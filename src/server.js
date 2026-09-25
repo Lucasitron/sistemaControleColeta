@@ -1,6 +1,7 @@
 const createApp = require('./app');
 const db = require('./db/database');
 const { startAutoChargeJob } = require('./services/autoChargeService');
+const { startReminderJob } = require('./services/reminderService');
 
 const PORT = process.env.PORT || 1213;
 const app = createApp();
@@ -19,6 +20,9 @@ async function startServer() {
     console.log('[SERVER] Iniciando job de cobranca automatica...');
     startAutoChargeJob();
     console.log('[SERVER] Job iniciado');
+    console.log('[SERVER] Iniciando agendador de lembretes...');
+    startReminderJob();
+    console.log('[SERVER] Agendador de lembretes iniciado');
 }
 
 if (require.main === module) {

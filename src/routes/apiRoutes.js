@@ -4,6 +4,7 @@ const configController = require('../controllers/configController');
 const participantController = require('../controllers/participantController');
 const financialController = require('../controllers/financialController');
 const botController = require('../controllers/botController');
+const reminderController = require('../controllers/reminderController');
 
 const router = express.Router();
 
@@ -35,5 +36,11 @@ router.post('/bot/charge', asyncHandler(botController.sendIndividualCharge));
 router.post('/bot/campaign', asyncHandler(botController.startCampaign));
 router.post('/bot/report', asyncHandler(botController.sendReport));
 router.post('/bot/clear-session', asyncHandler(botController.clearSession));
+
+router.get('/reminders', asyncHandler(reminderController.listReminders));
+router.post('/reminders', asyncHandler(reminderController.createReminder));
+router.put('/reminders/:id', asyncHandler(reminderController.updateReminder));
+router.delete('/reminders/:id', asyncHandler(reminderController.deleteReminder));
+router.post('/reminders/:id/send', asyncHandler(reminderController.sendReminderNow));
 
 module.exports = router;

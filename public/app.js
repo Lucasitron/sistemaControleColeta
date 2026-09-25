@@ -5,6 +5,7 @@ const state = {
     groupContacts: [],
     campaigns: [],
     dashboard: null,
+    reminders: [],
     currentMonth: new Date().toISOString().substring(0, 7) // 'YYYY-MM'
 };
 
@@ -412,6 +413,222 @@ function selectedGroup() {
     return state.groups.find(group => group.id === groupId) || null;
 }
 
+const WEEKDAYS = [
+    { value: 1, label: 'Seg' },
+    { value: 2, label: 'Ter' },
+    { value: 3, label: 'Qua' },
+    { value: 4, label: 'Qui' },
+    { value: 5, label: 'Sex' },
+    { value: 6, label: 'Sáb' },
+    { value: 0, label: 'Dom' }
+];
+
+function describeDaysShort(days) {
+    const list = Array.isArray(days) ? [...days].sort((a, b) => a - b) : [];
+    if (list.length === 7) return 'Todos os dias';
+    if (list.length === 5 && [1, 2, 3, 4, 5].every(d => list.includes(d))) return 'Seg a Sex';
+    const names = { 0: 'Dom', 1: 'Seg', 2: 'Ter', 3: 'Qua', 4: 'Qui', 5: 'Sex', 6: 'Sáb' };
+    return list.map(d => names[d]).join(', ') || 'Nenhum dia';
+}
+
+function reminderGroupOptions(selectedId, selectedName) {
+    const options = ['<option value="">Grupo da coleta (padrão)</option>'];
+    const seen = new Set(['']);
+    for (const group of state.groups) {
+        seen.add(group.id);
+        const selected = group.id === (selectedId || '');
+        options.push(`<option value="${escapeHtml(group.id)}" data-name="${escapeHtml(group.name)}"${selected ? ' selected' : ''}>${escapeHtml(group.name)}</option>`);
+    }
+    if (selectedId && !seen.has(selectedId)) {
+        options.push(`<option value="${escapeHtml(selectedId)}" selected>${escapeHtml(selectedName || selectedId)} (salvo)</option>`);
+    } else if (!selectedId && selectedName) {
+        options.push(`<option value="" selected>Grupo da coleta (padrão) · salvo: ${escapeHtml(selectedName)}</option>`);
+    }
+    return options.join('');
+}
+
+function weekdayCheckboxesHtml(selectedDays, fieldName) {
+    const selected = new Set(Array.isArray(selectedDays) ? selectedDays : []);
+    return WEEKDAYS.map(day => `
+        <label class="weekday-check${selected.has(day.value) ? ' checked' : ''}">
+            <input type="checkbox" data-field="days" value="${day.value}"${selected.has(day.value) ? ' checked' : ''}>
+            <span>${day.label}</span>
+        </label>
+    `).join('');
+}
+
+async function loadReminders() {
+    state.reminders = await api('/api/reminders');
+    renderReminders();
+}
+
+function refreshReminderGroupSelects() {
+    const formSelect = document.querySelector('#reminderFormGroup');
+    if (formSelect) {
+        const current = formSelect.value;
+        formSelect.innerHTML = reminderGroupOptions(current, '');
+        formSelect.value = current;
+    }
+    document.querySelectorAll('.reminder-card').forEach((card) => {
+        const select = card.querySelector('[data-field="groupId"]');
+        if (!select) return;
+        const currentId = select.value;
+        const currentName = select.selectedOptions[0]?.dataset?.name || '';
+        select.innerHTML = reminderGroupOptions(currentId, currentName);
+        select.value = currentId;
+    });
+}
+
+function renderReminders() {
+    const container = document.querySelector('#remindersList');
+    if (!container) return;
+
+    const formDays = document.querySelector('#reminderFormDays');
+    if (formDays && !formDays.children.length) {
+        formDays.innerHTML = weekdayCheckboxesHtml([1, 2, 3, 4, 5]);
+    }
+    const formSelect = document.querySelector('#reminderFormGroup');
+    if (formSelect && !formSelect.children.length) {
+        formSelect.innerHTML = reminderGroupOptions('', '');
+    }
+
+    if (!state.reminders.length) {
+        container.innerHTML = '<div class="empty-state"><i class="ph ph-empty"></i> Nenhum lembrete. Clique em "Novo lembrete" para criar.</div>';
+        return;
+    }
+
+    container.innerHTML = state.reminders.map((reminder) => `
+        <article class="reminder-card glass-panel ${reminder.enabled ? '' : 'disabled'}" data-id="${reminder.id}">
+            <div class="reminder-header">
+                <strong><i class="ph ph-bell-ringing"></i> ${escapeHtml(reminder.title || reminder.slot || 'Lembrete')} · ${escapeHtml(reminder.time)}</strong>
+                <label class="switch" title="Ativar / desativar">
+                    <input type="checkbox" data-field="enabled" ${reminder.enabled ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="reminder-meta muted">${escapeHtml(describeDaysShort(reminder.days))}</div>
+            <div class="inline-fields">
+                <div class="input-group">
+                    <label>Título
+                        <div class="input-wrapper">
+                            <i class="ph ph-tag"></i>
+                            <input type="text" data-field="title" value="${escapeHtml(reminder.title || '')}" maxlength="80" placeholder="Título do lembrete">
+                        </div>
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>Horário
+                        <div class="input-wrapper">
+                            <i class="ph ph-clock"></i>
+                            <input type="time" data-field="time" value="${escapeHtml(reminder.time)}" required>
+                        </div>
+                    </label>
+                </div>
+            </div>
+            <div class="input-group">
+                <span class="field-label">Dias de envio</span>
+                <div class="weekday-row">${weekdayCheckboxesHtml(reminder.days)}</div>
+            </div>
+            <div class="input-group">
+                <label>Grupo de envio (próprio)
+                    <div class="select-wrapper">
+                        <i class="ph ph-users-three"></i>
+                        <select data-field="groupId">${reminderGroupOptions(reminder.groupId || '', reminder.groupName || '')}</select>
+                    </div>
+                </label>
+            </div>
+            <div class="input-group">
+                <label>Mensagem do aviso
+                    <div class="textarea-wrapper">
+                        <textarea data-field="message" rows="4" placeholder="Texto enviado no horário...">${escapeHtml(reminder.message || '')}</textarea>
+                    </div>
+                </label>
+            </div>
+            <div class="button-row reminder-actions">
+                <button type="button" class="primary action-btn" data-action="save"><i class="ph ph-floppy-disk"></i> Salvar</button>
+                <button type="button" class="glass-btn action-btn" data-action="send"><i class="ph ph-paper-plane-tilt"></i> Enviar agora</button>
+                <button type="button" class="glass-btn action-btn danger-ghost" data-action="delete"><i class="ph ph-trash"></i></button>
+            </div>
+        </article>
+    `).join('');
+}
+
+function readReminderPayload(scope) {
+    const days = [...scope.querySelectorAll('[data-field="days"]:checked')].map(el => Number(el.value));
+    const groupSelect = scope.querySelector('[data-field="groupId"]') || scope.querySelector('#reminderFormGroup');
+    const groupId = groupSelect ? groupSelect.value : '';
+    const groupName = groupSelect && groupSelect.selectedOptions[0]?.dataset?.name
+        ? groupSelect.selectedOptions[0].dataset.name
+        : '';
+    const titleEl = scope.querySelector('[data-field="title"]') || scope.querySelector('#reminderFormTitle');
+    const timeEl = scope.querySelector('[data-field="time"]') || scope.querySelector('#reminderFormTime');
+    const messageEl = scope.querySelector('[data-field="message"]') || scope.querySelector('#reminderFormMessage');
+    return {
+        title: titleEl ? titleEl.value : '',
+        time: timeEl ? timeEl.value : '',
+        days,
+        groupId,
+        groupName,
+        message: messageEl ? messageEl.value : '',
+        enabled: true
+    };
+}
+
+function readReminderCardPayload(card) {
+    const payload = readReminderPayload(card);
+    payload.enabled = card.querySelector('[data-field="enabled"]').checked;
+    return payload;
+}
+
+async function saveReminder(card) {
+    const id = card.dataset.id;
+    const payload = readReminderCardPayload(card);
+    const updated = await api(`/api/reminders/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(payload)
+    });
+    state.reminders = state.reminders.map(r => r.id === updated.id ? updated : r);
+    renderReminders();
+    showToast(`Lembrete "${updated.title || updated.time}" salvo.`);
+}
+
+async function deleteReminder(card) {
+    const id = card.dataset.id;
+    const reminder = state.reminders.find(r => r.id === Number(id));
+    if (!confirm(`Excluir o lembrete "${reminder?.title || reminder?.time}"?`)) return;
+    await api(`/api/reminders/${id}`, { method: 'DELETE' });
+    state.reminders = state.reminders.filter(r => r.id !== Number(id));
+    renderReminders();
+    showToast('Lembrete excluído.');
+}
+
+async function sendReminderNow(card, button) {
+    const id = card.dataset.id;
+    await withLoading(button, 'Enviando...', async () => {
+        const result = await api(`/api/reminders/${id}/send`, { method: 'POST' });
+        showToast(result.message);
+    });
+}
+
+async function createReminderFromForm(form) {
+    const payload = readReminderPayload(form);
+    const checkboxes = form.querySelectorAll('#reminderFormDays [data-field="days"]:checked');
+    payload.days = [...checkboxes].map(el => Number(el.value));
+    const created = await api('/api/reminders', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+    });
+    state.reminders = [...state.reminders, created].sort((a, b) => a.time.localeCompare(b.time));
+    renderReminders();
+    form.reset();
+    const daysBox = form.querySelector('#reminderFormDays');
+    if (daysBox) daysBox.innerHTML = weekdayCheckboxesHtml([1, 2, 3, 4, 5]);
+    const timeInput = form.querySelector('#reminderFormTime');
+    if (timeInput) timeInput.value = '09:00';
+    form.hidden = true;
+    showToast(`Lembrete "${created.title}" criado.`);
+}
+
 async function listGroups() {
     const status = await api('/api/bot/status');
     setStatus(status);
@@ -426,6 +643,7 @@ async function listGroups() {
 
     state.groups = await api('/api/bot/groups');
     renderGroups();
+    refreshReminderGroupSelects();
     showToast(`${state.groups.length} grupos encontrados.`);
 }
 
@@ -838,6 +1056,90 @@ elements.purchasesTable.addEventListener('click', (event) => {
 
 loadConfig()
     .then(refreshStatus)
+    .then(loadReminders)
     .catch(error => showToast(error.message));
+
+document.querySelector('#btnReloadReminders')?.addEventListener('click', async (event) => {
+    try {
+        await withLoading(event.currentTarget, 'Recarregando...', loadReminders);
+    } catch (error) {
+        showToast(error.message);
+    }
+});
+
+document.querySelector('#remindersList')?.addEventListener('click', async (event) => {
+    const weekdayLabel = event.target.closest('.weekday-check');
+    if (weekdayLabel && event.target.matches('input[type="checkbox"]')) {
+        weekdayLabel.classList.toggle('checked', event.target.checked);
+        return;
+    }
+    const button = event.target.closest('button[data-action]');
+    if (!button) return;
+    const card = event.target.closest('.reminder-card');
+    if (!card) return;
+    try {
+        if (button.dataset.action === 'save') {
+            await withLoading(button, 'Salvando...', () => saveReminder(card));
+        } else if (button.dataset.action === 'send') {
+            await sendReminderNow(card, button);
+        } else if (button.dataset.action === 'delete') {
+            await withLoading(button, 'Excluindo...', () => deleteReminder(card));
+        }
+    } catch (error) {
+        showToast(error.message);
+    }
+});
+
+document.querySelector('#btnNewReminder')?.addEventListener('click', () => {
+    const form = document.querySelector('#reminderForm');
+    if (!form) return;
+    form.hidden = !form.hidden;
+    if (!form.hidden) {
+        refreshReminderGroupSelects();
+        document.querySelector('#reminderFormTitle')?.focus();
+        document.querySelector('#lembretes')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+});
+
+document.querySelector('#btnCancelReminder')?.addEventListener('click', () => {
+    const form = document.querySelector('#reminderForm');
+    if (form) form.hidden = true;
+});
+
+document.querySelector('#btnReminderGroups')?.addEventListener('click', async (event) => {
+    try {
+        await withLoading(event.currentTarget, 'Buscando...', async () => {
+            await listGroups();
+        });
+    } catch (error) {
+        showToast(error.message);
+    }
+});
+
+document.querySelector('#reminderForm')?.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = event.target;
+    try {
+        await withLoading(form.querySelector('[type="submit"]'), 'Criando...', () => createReminderFromForm(form));
+    } catch (error) {
+        showToast(error.message);
+    }
+});
+
+document.querySelector('#reminderForm')?.addEventListener('click', (event) => {
+    const shortcut = event.target.closest('[data-days]');
+    if (shortcut) {
+        const values = new Set(shortcut.dataset.days.split(',').filter(Boolean).map(Number));
+        document.querySelectorAll('#reminderFormDays [data-field="days"]').forEach((checkbox) => {
+            checkbox.checked = values.has(Number(checkbox.value));
+            checkbox.closest('.weekday-check')?.classList.toggle('checked', checkbox.checked);
+        });
+        return;
+    }
+    const weekdayLabel = event.target.closest('.weekday-check');
+    if (weekdayLabel && event.target.matches('input[type="checkbox"]')) {
+        weekdayLabel.classList.toggle('checked', event.target.checked);
+    }
+});
 
 window.setInterval(refreshStatus, 6000);

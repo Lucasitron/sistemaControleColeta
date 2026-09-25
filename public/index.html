@@ -24,6 +24,7 @@
                 <a href="#caixa" class="nav-item"><i class="ph ph-coin"></i> Caixa & Despesas</a>
                 <a href="#participantes" class="nav-item"><i class="ph ph-users"></i> Participantes</a>
                 <a href="#relatorios" class="nav-item"><i class="ph ph-whatsapp-logo"></i> Relatórios</a>
+                <a href="#lembretes" class="nav-item"><i class="ph ph-bell-ringing"></i> Lembretes</a>
                 <a href="#configuracoes" class="nav-item"><i class="ph ph-gear"></i> Config</a>
             </nav>
         </aside>
@@ -281,6 +282,75 @@
                     </div>
                     <p class="muted">Gera e envia o resumo financeiro deste mês no grupo alvo configurado (Arrecadado, Compras, Saldo e Devedores).</p>
                 </section>
+            </section>
+
+            <section id="lembretes" class="panel glass-panel table-panel">
+                <div class="panel-header">
+                    <div>
+                        <p class="eyebrow"><i class="ph-fill ph-bell-ringing"></i> Automático</p>
+                        <h3>Lembretes</h3>
+                    </div>
+                    <div class="button-row">
+                        <button id="btnNewReminder" class="primary action-btn"><i class="ph ph-plus"></i> Novo lembrete</button>
+                        <button id="btnReminderGroups" class="glass-btn action-btn"><i class="ph ph-list-magnifying-glass"></i> Listar grupos</button>
+                        <button id="btnReloadReminders" class="glass-btn action-btn"><i class="ph ph-arrow-clockwise"></i> Recarregar</button>
+                    </div>
+                </div>
+                <p class="muted">Gerencie todos os avisos automáticos: título, horário, dias da semana, mensagem e grupo de envio próprio (independente do grupo da coleta). Deixe o grupo como "Grupo da coleta" para usar o grupo alvo padrão.</p>
+
+                <form id="reminderForm" class="reminder-form glass-panel" autocomplete="off" hidden>
+                    <h4><i class="ph ph-plus-circle"></i> Novo lembrete</h4>
+                    <div class="inline-fields">
+                        <div class="input-group">
+                            <label>Título
+                                <div class="input-wrapper">
+                                    <i class="ph ph-tag"></i>
+                                    <input id="reminderFormTitle" type="text" placeholder="Ex: Lembrete da manhã" required maxlength="80">
+                                </div>
+                            </label>
+                        </div>
+                        <div class="input-group">
+                            <label>Horário
+                                <div class="input-wrapper">
+                                    <i class="ph ph-clock"></i>
+                                    <input id="reminderFormTime" type="time" value="09:00" required>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <span class="field-label">Dias de envio</span>
+                        <div class="weekday-row" id="reminderFormDays"></div>
+                        <div class="button-row weekday-shortcuts">
+                            <button type="button" class="glass-btn action-btn" data-days="1,2,3,4,5">Dias úteis</button>
+                            <button type="button" class="glass-btn action-btn" data-days="0,1,2,3,4,5,6">Todos os dias</button>
+                            <button type="button" class="glass-btn action-btn" data-days="">Limpar</button>
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>Grupo de envio (próprio, diferente da coleta)
+                            <div class="select-wrapper">
+                                <i class="ph ph-users-three"></i>
+                                <select id="reminderFormGroup"></select>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="input-group">
+                        <label>Mensagem do aviso
+                            <div class="textarea-wrapper">
+                                <textarea id="reminderFormMessage" rows="4" placeholder="Texto enviado no horário..." required></textarea>
+                            </div>
+                        </label>
+                    </div>
+                    <div class="button-row">
+                        <button type="submit" class="primary action-btn"><i class="ph ph-check"></i> Criar lembrete</button>
+                        <button type="button" id="btnCancelReminder" class="glass-btn action-btn"><i class="ph ph-x"></i> Cancelar</button>
+                    </div>
+                </form>
+
+                <div id="remindersList" class="reminders-grid">
+                    <div class="empty-state"><i class="ph ph-spinner ph-spin"></i> Carregando lembretes...</div>
+                </div>
             </section>
 
             <section id="participantes" class="panel glass-panel table-panel">
