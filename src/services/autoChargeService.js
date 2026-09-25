@@ -1,6 +1,7 @@
 const db = require('../db/database');
 const { getBot } = require('./botManager');
 const { ensureBotReadyForSend } = require('./whatsappReady');
+const { zonedParts } = require('../utils/timezone');
 
 const CHARGE_DAYS = new Set([10, 15]);
 const ONE_HOUR = 60 * 60 * 1000;
@@ -10,9 +11,7 @@ function wait(ms) {
 }
 
 async function runAutomaticCharge(sentDates) {
-    const today = new Date();
-    const day = today.getDate();
-    const dateStr = today.toISOString().split('T')[0];
+    const { dayOfMonth: day, dateKey: dateStr } = zonedParts(new Date());
 
     if (!CHARGE_DAYS.has(day) || sentDates.has(dateStr)) {
         return;

@@ -1,22 +1,18 @@
 const db = require('../db/database');
 const { getBot } = require('./botManager');
 const { ensureBotReadyForSend } = require('./whatsappReady');
+const { zonedParts, TIMEZONE } = require('../utils/timezone');
 
 const CHECK_INTERVAL_MS = 30 * 1000;
 
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
 function nowTimeHHMM(date = new Date()) {
-    const hh = String(date.getHours()).padStart(2, '0');
-    const mm = String(date.getMinutes()).padStart(2, '0');
-    return `${hh}:${mm}`;
+    return zonedParts(date).hhmm;
 }
 
 function todayKey(date = new Date()) {
-    const y = date.getFullYear();
-    const m = String(date.getMonth() + 1).padStart(2, '0');
-    const d = String(date.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+    return zonedParts(date).dateKey;
 }
 
 function describeDays(days) {
@@ -79,9 +75,7 @@ async function dispatchReminder(reminder) {
 }
 
 async function runReminderCheck(sentKeys, now = new Date()) {
-    const hhmm = nowTimeHHMM(now);
-    const today = todayKey(now);
-    const weekday = now.getDay();
+    const { hhmm, dateKey: today, weekday } = zonedParts(now);
 
     const reminders = await db.getReminders();
     for (const reminder of reminders) {
@@ -108,7 +102,7 @@ async function runReminderCheck(sentKeys, now = new Date()) {
 function startReminderJob() {
     const sentKeys = new Set();
     let running = false;
-    console.log('[Lembretes] Agendador iniciado (horarios e dias configuraveis pela interface).');
+    console.log(`[Lembretes] Agendador iniciado no fuso ${TIMEZONE} (horarios e dias configuraveis pela interface).`);
     return setInterval(async () => {
         if (running) {
             return;
