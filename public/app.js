@@ -6,6 +6,7 @@ const state = {
     campaigns: [],
     dashboard: null,
     reminders: [],
+    settings: {},
     currentMonth: new Date().toISOString().substring(0, 7) // 'YYYY-MM'
 };
 
@@ -112,8 +113,46 @@ function setStatus(status) {
     renderBotLogs(status.logs || []);
 }
 
+function configGroupOptions(savedValue) {
+    const saved = String(savedValue || '');
+    const options = [];
+    if (!state.groups.length && !saved) {
+        return '<option value="">Conecte o WhatsApp e liste os grupos</option>';
+    }
+    if (!state.groups.length && saved) {
+        return `<option value="${escapeHtml(saved)}" selected>Salvo: ${escapeHtml(saved)}</option>`;
+    }
+    const seen = new Set();
+    for (const group of state.groups) {
+        seen.add(group.id);
+        const count = group.participants === null || group.participants === undefined ? '' : ` (${group.participants})`;
+        const selected = group.id === saved;
+        options.push(`<option value="${escapeHtml(group.id)}" data-name="${escapeHtml(group.name)}"${selected ? ' selected' : ''}>${escapeHtml(group.name)}${count}</option>`);
+    }
+    if (saved && !seen.has(saved)) {
+        options.push(`<option value="${escapeHtml(saved)}" selected>Salvo: ${escapeHtml(saved)}</option>`);
+    }
+    return options.join('');
+}
+
+function fillConfigGroupSelects() {
+    const coleta = document.querySelector('#grupoColeta');
+    const lembretes = document.querySelector('#grupoLembretes');
+    if (coleta) {
+        const current = coleta.value || state.settings.grupoColeta || state.settings.grupoAlvo || '';
+        coleta.innerHTML = configGroupOptions(current);
+        coleta.value = current;
+    }
+    if (lembretes) {
+        const current = lembretes.value || state.settings.grupoLembretes || '';
+        lembretes.innerHTML = configGroupOptions(current);
+        lembretes.value = current;
+    }
+}
+
 function fillSettings(settings) {
-    document.querySelector('#grupoAlvo').value = settings.grupoAlvo || '';
+    state.settings = settings || {};
+    fillConfigGroupSelects();
     document.querySelector('#pixChave').value = settings.pixChave || '';
     document.querySelector('#pixCopiaCola').value = settings.pixCopiaCola || '';
     document.querySelector('#maxOpcoesPorEnquete').value = settings.maxOpcoesPorEnquete || 10;
@@ -129,8 +168,11 @@ function readSettingsPayload() {
         .map(value => value.trim())
         .filter(Boolean);
 
+    const grupoColeta = document.querySelector('#grupoColeta').value;
     return {
-        grupoAlvo: document.querySelector('#grupoAlvo').value,
+        grupoAlvo: grupoColeta,
+        grupoColeta,
+        grupoLembretes: document.querySelector('#grupoLembretes').value,
         pixChave: document.querySelector('#pixChave').value,
         pixCopiaCola: document.querySelector('#pixCopiaCola').value,
         maxOpcoesPorEnquete: document.querySelector('#maxOpcoesPorEnquete').value,
@@ -380,6 +422,8 @@ function renderGroups() {
         const count = group.participants === null ? '' : ` (${group.participants})`;
         return `<option value="${escapeHtml(group.id)}" data-name="${escapeHtml(group.name)}">${escapeHtml(group.name)}${count}</option>`;
     }).join('');
+
+    fillConfigGroupSelects();
 }
 
 function renderGroupContacts() {
@@ -432,7 +476,7 @@ function describeDaysShort(days) {
 }
 
 function reminderGroupOptions(selectedId, selectedName) {
-    const options = ['<option value="">Grupo da coleta (padrão)</option>'];
+    const options = ['<option value="">Grupo padrão de lembretes</option>'];
     const seen = new Set(['']);
     for (const group of state.groups) {
         seen.add(group.id);
@@ -442,7 +486,7 @@ function reminderGroupOptions(selectedId, selectedName) {
     if (selectedId && !seen.has(selectedId)) {
         options.push(`<option value="${escapeHtml(selectedId)}" data-name="${escapeHtml(selectedName || '')}" selected>${escapeHtml(selectedName || selectedId)} (salvo)</option>`);
     } else if (!selectedId && selectedName) {
-        options.push(`<option value="" data-name="${escapeHtml(selectedName)}" selected>Grupo da coleta (padrão) · salvo: ${escapeHtml(selectedName)}</option>`);
+        options.push(`<option value="" data-name="${escapeHtml(selectedName)}" selected>Grupo padrão de lembretes · salvo: ${escapeHtml(selectedName)}</option>`);
     }
     return options.join('');
 }
@@ -452,7 +496,10 @@ function reminderDestinationLabel(reminder) {
         const known = state.groups.find(g => g.id === reminder.groupId);
         return known ? known.name : (reminder.groupName || reminder.groupId);
     }
-    return 'Grupo da coleta';
+    if (reminder.groupName) {
+        return reminder.groupName;
+    }
+    return 'Padrão de lembretes';
 }
 
 function weekdayCheckboxesHtml(selectedDays, fieldName) {
@@ -547,7 +594,7 @@ function renderReminders() {
                         <select data-field="groupId">${reminderGroupOptions(reminder.groupId || '', reminder.groupName || '')}</select>
                     </div>
                 </label>
-                <small class="muted groups-hint">Conecte o WhatsApp e clique em "Listar grupos" para escolher um grupo diferente do da coleta.</small>
+                <small class="muted groups-hint">Conecte o WhatsApp e clique em "Listar grupos" para escolher o grupo de envio. Vazio = grupo padrão de lembretes.</small>
             </div>
             <div class="input-group">
                 <label>Mensagem do aviso
@@ -595,7 +642,7 @@ function readReminderCardPayload(card) {
     return payload;
 }
 
-async function saveReminder(card) {
+async function saveReminder(card, options = {}) {
     const id = card.dataset.id;
     const payload = readReminderCardPayload(card);
     const updated = await api(`/api/reminders/${id}`, {
@@ -604,7 +651,11 @@ async function saveReminder(card) {
     });
     state.reminders = state.reminders.map(r => r.id === updated.id ? updated : r);
     renderReminders();
-    showToast(`Lembrete "${updated.title || updated.time}" salvo.`);
+    if (!options.silent) {
+        const dest = updated.groupName || updated.groupId || 'padrão de lembretes';
+        showToast(`Lembrete "${updated.title || updated.time}" salvo para ${dest}.`);
+    }
+    return updated;
 }
 
 async function deleteReminder(card) {
@@ -619,7 +670,8 @@ async function deleteReminder(card) {
 
 async function sendReminderNow(card, button) {
     const id = card.dataset.id;
-    await withLoading(button, 'Enviando...', async () => {
+    await withLoading(button, 'Salvando e enviando...', async () => {
+        await saveReminder(card, { silent: true });
         const result = await api(`/api/reminders/${id}/send`, { method: 'POST' });
         showToast(result.message);
     });
@@ -871,10 +923,12 @@ document.querySelector('#btnSendReport').addEventListener('click', async (e) => 
 
 elements.settingsForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const payload = readSettingsPayload();
     await api('/api/settings', {
         method: 'PUT',
-        body: JSON.stringify(readSettingsPayload())
+        body: JSON.stringify(payload)
     });
+    state.settings = { ...state.settings, ...payload };
 
     showToast('Configuracoes salvas.');
 });
@@ -882,26 +936,6 @@ elements.settingsForm.addEventListener('submit', async (event) => {
 document.querySelector('#btnListGroups').addEventListener('click', async (event) => {
     try {
         await withLoading(event.currentTarget, 'Buscando...', listGroups);
-    } catch (error) {
-        showToast(error.message);
-    }
-});
-
-document.querySelector('#btnSelectGroup').addEventListener('click', async (event) => {
-    try {
-        await withLoading(event.currentTarget, 'Salvando...', async () => {
-            const group = selectedGroup();
-            if (!group) {
-                throw new Error('Selecione um grupo primeiro.');
-            }
-
-            document.querySelector('#grupoAlvo').value = group.name;
-            await api('/api/settings', {
-                method: 'PUT',
-                body: JSON.stringify(readSettingsPayload())
-            });
-            showToast(`Grupo selecionado: ${group.name}`);
-        });
     } catch (error) {
         showToast(error.message);
     }

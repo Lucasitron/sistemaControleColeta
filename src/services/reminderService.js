@@ -27,10 +27,18 @@ function describeDays(days) {
     return list.map(d => WEEKDAY_SHORT[d]).join(', ');
 }
 
-function resolveTarget(reminder, fallbackGroup) {
-    return (reminder.groupId || '').trim()
-        || (reminder.groupName || '').trim()
-        || (fallbackGroup || '').trim();
+function resolveTarget(reminder, config) {
+    const own = (reminder.groupId || '').trim() || (reminder.groupName || '').trim();
+    if (own) {
+        return own;
+    }
+    const fallback = (config.grupoLembretes || '').trim();
+    if (fallback) {
+        return fallback;
+    }
+    const error = new Error('Nenhum grupo de envio definido para este lembrete. Selecione o grupo no lembrete ou configure o grupo padrão de lembretes.');
+    error.statusCode = 400;
+    throw error;
 }
 
 async function listReminders() {
@@ -51,18 +59,18 @@ async function deleteReminder(id) {
 
 async function sendReminderNow(id) {
     const reminder = await db.getReminder(id);
+    const config = await db.getBotConfig();
+    const target = resolveTarget(reminder, config);
     await dispatchReminder(reminder);
-    return { ok: true, message: `Lembrete "${reminder.title || reminder.time}" enviado para "${reminder.groupName || reminder.groupId || 'grupo da coleta'}".` };
+    const dest = reminder.groupName || target;
+    return { ok: true, message: `Lembrete "${reminder.title || reminder.time}" enviado para "${dest}".` };
 }
 
 async function dispatchReminder(reminder) {
     const config = await db.getBotConfig();
     const bot = getBot(config);
     await ensureBotReadyForSend(bot);
-    const target = resolveTarget(reminder, config.grupoAlvo);
-    if (!target) {
-        throw new Error('Nenhum grupo definido para o lembrete. Selecione o grupo de envio.');
-    }
+    const target = resolveTarget(reminder, config);
     if (!reminder.message || !reminder.message.trim()) {
         throw new Error('Mensagem do lembrete esta vazia.');
     }

@@ -13,6 +13,8 @@ async function getInitialConfig() {
     return {
         settings: {
             grupoAlvo: settings.grupoAlvo || botConfig.grupoAlvo,
+            grupoColeta: settings.grupoColeta || botConfig.grupoColeta,
+            grupoLembretes: settings.grupoLembretes || botConfig.grupoLembretes || '',
             pixChave: settings.pixChave || botConfig.pix.chave,
             pixCopiaCola: settings.pixCopiaCola || botConfig.pix.copiaCola,
             maxOpcoesPorEnquete: botConfig.maxOpcoesPorEnquete,

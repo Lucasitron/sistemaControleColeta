@@ -296,7 +296,7 @@
                         <button id="btnReloadReminders" class="glass-btn action-btn"><i class="ph ph-arrow-clockwise"></i> Recarregar</button>
                     </div>
                 </div>
-                <p class="muted">Gerencie todos os avisos automáticos: título, horário, dias da semana, mensagem e grupo de envio próprio (independente do grupo da coleta). Deixe o grupo como "Grupo da coleta" para usar o grupo alvo padrão.</p>
+                <p class="muted">Gerencie todos os avisos automáticos: título, horário, dias da semana, mensagem e grupo de envio próprio (independente do grupo da coleta). Deixe o grupo como "Grupo padrão de lembretes" para usar o padrão definido nas Configurações.</p>
 
                 <form id="reminderForm" class="reminder-form glass-panel" autocomplete="off" hidden>
                     <h4><i class="ph ph-plus-circle"></i> Novo lembrete</h4>
@@ -468,15 +468,31 @@
                         <button type="submit" class="primary action-btn"><i class="ph ph-floppy-disk"></i> Salvar</button>
                     </div>
 
-                    <div class="input-group">
-                        <label>
-                            Grupo alvo (Relatórios e Campanhas)
-                            <div class="input-wrapper">
-                                <i class="ph ph-users-three"></i>
-                                <input id="grupoAlvo" name="grupoAlvo" type="text" placeholder="Copa_FabLab">
-                            </div>
-                        </label>
+                    <div class="inline-fields">
+                        <div class="input-group">
+                            <label>
+                                Grupo da coleta (campanhas e relatórios)
+                                <div class="select-wrapper">
+                                    <i class="ph ph-users-three"></i>
+                                    <select id="grupoColeta" name="grupoColeta">
+                                        <option value="">Conecte o WhatsApp e liste os grupos</option>
+                                    </select>
+                                </div>
+                            </label>
+                        </div>
+                        <div class="input-group">
+                            <label>
+                                Grupo padrão dos lembretes
+                                <div class="select-wrapper">
+                                    <i class="ph ph-bell-ringing"></i>
+                                    <select id="grupoLembretes" name="grupoLembretes">
+                                        <option value="">Conecte o WhatsApp e liste os grupos</option>
+                                    </select>
+                                </div>
+                            </label>
+                        </div>
                     </div>
+                    <p class="muted">Cada lembrete pode ter seu próprio grupo de envio. Quando o lembrete não tem grupo próprio, usa o grupo padrão dos lembretes — nunca o da coleta.</p>
 
                     <section class="group-tools">
                         <div class="panel-header compact-header">
@@ -516,7 +532,6 @@
                         </div>
 
                         <div class="button-row">
-                            <button type="button" id="btnSelectGroup" class="primary"><i class="ph ph-check-circle"></i> Selecionar grupo</button>
                             <button type="button" id="btnLoadGroupContacts" class="glass-btn"><i class="ph ph-address-book"></i> Carregar contatos</button>
                             <button type="button" id="btnImportGroupContacts" class="glass-btn"><i class="ph ph-user-plus"></i> Importar contatos</button>
                         </div>

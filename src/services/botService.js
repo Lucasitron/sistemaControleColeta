@@ -107,7 +107,7 @@ async function sendReport(month) {
     const { config, bot } = await getConfiguredBot();
     const data = await db.getDashboard(month);
     console.log('[BOT_SERVICE] Dados do dashboard obtidos');
-    await bot.enviarMensagemGrupo(config.grupoAlvo, buildFinancialReport(data));
+    await bot.enviarMensagemGrupo(config.grupoColeta || config.grupoAlvo, buildFinancialReport(data));
     console.log('[BOT_SERVICE] Relatorio enviado');
     return { ok: true, message: 'Relatório enviado com sucesso.' };
 }

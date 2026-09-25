@@ -144,6 +144,8 @@ class Database {
         await this.seedReminders();
 
         await this.seedDefaults();
+
+        await this.migrateGroupSettings();
     }
 
     async ensureColumn(tableName, columnName, definition) {
@@ -161,6 +163,8 @@ class Database {
         }
 
         await this.saveSetting('grupoAlvo', defaultConfig.grupoAlvo);
+        await this.saveSetting('grupoColeta', defaultConfig.grupoAlvo);
+        await this.saveSetting('grupoLembretes', '');
         await this.saveSetting('pixChave', defaultConfig.pix.chave);
         await this.saveSetting('pixCopiaCola', defaultConfig.pix.copiaCola);
         await this.saveSetting('maxOpcoesPorEnquete', String(defaultConfig.maxOpcoesPorEnquete));
@@ -195,12 +199,29 @@ class Database {
     }
 
     async updateSettings(settings) {
-        const allowedKeys = ['grupoAlvo', 'pixChave', 'pixCopiaCola', 'maxOpcoesPorEnquete', 'valoresContribuicao'];
+        const allowedKeys = ['grupoAlvo', 'grupoColeta', 'grupoLembretes', 'pixChave', 'pixCopiaCola', 'maxOpcoesPorEnquete', 'valoresContribuicao'];
         for (const key of allowedKeys) {
             if (Object.prototype.hasOwnProperty.call(settings, key)) {
-                const value = Array.isArray(settings[key]) ? JSON.stringify(settings[key]) : String(settings[key]);
+                const value = Array.isArray(settings[key]) ? JSON.stringify(settings[key]) : String(settings[key] ?? '');
                 await this.saveSetting(key, value);
             }
+        }
+        // Compat: grupoAlvo legado espelha o grupo da coleta.
+        if (Object.prototype.hasOwnProperty.call(settings, 'grupoColeta')) {
+            await this.saveSetting('grupoAlvo', String(settings.grupoColeta ?? ''));
+        }
+    }
+
+    async migrateGroupSettings() {
+        const settings = await this.getSettings();
+        if (!settings.grupoColeta) {
+            await this.saveSetting('grupoColeta', settings.grupoAlvo || defaultConfig.grupoAlvo);
+        }
+        if (settings.grupoLembretes === undefined) {
+            await this.saveSetting('grupoLembretes', '');
+        }
+        if (!settings.grupoAlvo && settings.grupoColeta) {
+            await this.saveSetting('grupoAlvo', settings.grupoColeta);
         }
     }
 
@@ -502,11 +523,14 @@ class Database {
             }
         }
 
+        const grupoColeta = settings.grupoColeta || settings.grupoAlvo || defaultConfig.grupoAlvo;
         return {
             delays: defaultConfig.delays,
             nomes,
             maxOpcoesPorEnquete: Number(settings.maxOpcoesPorEnquete || defaultConfig.maxOpcoesPorEnquete),
-            grupoAlvo: settings.grupoAlvo || defaultConfig.grupoAlvo,
+            grupoAlvo: grupoColeta,
+            grupoColeta,
+            grupoLembretes: settings.grupoLembretes || '',
             pix: {
                 chave: settings.pixChave || defaultConfig.pix.chave,
                 copiaCola: settings.pixCopiaCola || defaultConfig.pix.copiaCola
