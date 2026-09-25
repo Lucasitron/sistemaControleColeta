@@ -1,9 +1,8 @@
 const db = require('../db/database');
 const { getBot } = require('./botManager');
+const { ensureBotReadyForSend } = require('./whatsappReady');
 
 const CHECK_INTERVAL_MS = 30 * 1000;
-const READY_WAIT_MS = 90 * 1000;
-const READY_POLL_MS = 2000;
 
 const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 
@@ -69,7 +68,7 @@ async function sendReminderNow(id) {
 async function dispatchReminder(reminder) {
     const config = await db.getBotConfig();
     const bot = getBot(config);
-    await ensureBotReadyForSend(bot);
+    await ensureBotReadyForSend(bot, { label: 'Lembretes' });
     const target = resolveTarget(reminder, config);
     if (!reminder.message || !reminder.message.trim()) {
         throw new Error('Mensagem do lembrete esta vazia.');
@@ -77,29 +76,6 @@ async function dispatchReminder(reminder) {
     await bot.enviarMensagemGrupo(target, reminder.message.trim());
     const label = reminder.title ? `"${reminder.title}"` : reminder.slot;
     console.log(`[Lembretes] Enviado ${label} (${reminder.time}) para "${reminder.groupName || target}".`);
-}
-
-async function ensureBotReadyForSend(bot) {
-    if (bot.getStatus().isReady) {
-        return;
-    }
-    console.log('[Lembretes] WhatsApp nao esta pronto. Iniciando antes do envio...');
-    try {
-        await bot.iniciar();
-    } catch (error) {
-        console.log(`[Lembretes] Falha ao iniciar WhatsApp: ${error.message}`);
-    }
-    const startedAt = Date.now();
-    while (Date.now() - startedAt < READY_WAIT_MS) {
-        if (bot.getStatus().isReady) {
-            console.log('[Lembretes] WhatsApp pronto para envio.');
-            return;
-        }
-        await new Promise(resolve => setTimeout(resolve, READY_POLL_MS));
-    }
-    const error = new Error('WhatsApp ainda nao esta pronto. Clique em Iniciar WhatsApp, escaneie o QR Code e tente novamente.');
-    error.statusCode = 409;
-    throw error;
 }
 
 async function runReminderCheck(sentKeys, now = new Date()) {

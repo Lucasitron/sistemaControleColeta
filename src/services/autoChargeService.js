@@ -1,5 +1,6 @@
 const db = require('../db/database');
 const { getBot } = require('./botManager');
+const { ensureBotReadyForSend } = require('./whatsappReady');
 
 const CHARGE_DAYS = new Set([10, 15]);
 const ONE_HOUR = 60 * 60 * 1000;
@@ -19,8 +20,14 @@ async function runAutomaticCharge(sentDates) {
 
     const config = await db.getBotConfig();
     const bot = getBot(config);
-    if (!bot.getStatus().isReady) {
-        return;
+    try {
+        await ensureBotReadyForSend(bot, { label: 'Auto-Cobranca' });
+    } catch (error) {
+        if (error.statusCode === 409) {
+            console.log(`[Auto-Cobranca] WhatsApp indisponivel no dia ${day}. Tenta de novo na proxima hora.`);
+            return;
+        }
+        throw error;
     }
 
     const data = await db.getDashboard();
@@ -47,16 +54,24 @@ async function runAutomaticCharge(sentDates) {
 
 function startAutoChargeJob() {
     const sentDates = new Set();
+    let running = false;
 
     return setInterval(async () => {
+        if (running) {
+            return;
+        }
+        running = true;
         try {
             await runAutomaticCharge(sentDates);
         } catch (error) {
             console.error('[Auto-Cobranca] Erro:', error);
+        } finally {
+            running = false;
         }
     }, ONE_HOUR);
 }
 
 module.exports = {
-    startAutoChargeJob
+    startAutoChargeJob,
+    runAutomaticCharge
 };
