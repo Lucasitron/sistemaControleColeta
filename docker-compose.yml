@@ -11,3 +11,4 @@ services:
       - ./.wwebjs_cache:/app/.wwebjs_cache
     environment:
       - PORT=1213
+      - NODE_OPTIONS=--dns-result-order=ipv4first

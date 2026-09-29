@@ -45,6 +45,7 @@ class ColetaCopaBot {
             }),
             puppeteer: {
                 headless: this.headless,
+                timeout: 120000,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
@@ -53,6 +54,7 @@ class ColetaCopaBot {
                     '--no-first-run',
                     '--no-zygote',
                     '--disable-gpu',
+                    '--disable-features=Vulkan',
                     '--window-size=1280,720'
                 ]
             }
@@ -261,7 +263,9 @@ class ColetaCopaBot {
                     error.message.includes('already running') ||
                     error.message.includes('Protocol error') ||
                     error.message.includes('Navigation failed') ||
-                    error.message.includes('Target closed');
+                    error.message.includes('Target closed') ||
+                    error.message.includes('ERR_TIMED_OUT') ||
+                    error.message.includes('net::');
 
                 if (!isRecoverable || attempt === maxRetries) {
                     // On last attempt for recoverable errors, try clearing session
