@@ -726,7 +726,7 @@ async function loadGroupContacts() {
         throw new Error('Selecione um grupo primeiro.');
     }
 
-    state.groupContacts = await api(`/api/bot/group-participants?groupId=${encodeURIComponent(group.id)}`);
+    state.groupContacts = await api(`/api/bot/group-participants?groupId=${encodeURIComponent(group)}`);
     renderGroupContacts();
     showToast(`${state.groupContacts.length} contatos carregados.`);
 }
