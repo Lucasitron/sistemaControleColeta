@@ -553,6 +553,20 @@ class ColetaCopaBot {
         }
     }
 
+    /**
+     * Lista os participantes (contatos) de um grupo do WhatsApp.
+     *
+     * Passo a passo:
+     * 1. Exige `isReady` (bot conectado); senão lança erro.
+     * 2. Resolve o ID alvo: usa `groupId` ou `_resolveGroupId()` (grupo da config).
+     * 3. Localiza o chat via `getChats()` (com fallback para `getChatById`).
+     * 4. Para cada `participant`, resolve o nome via `getContactById`
+     *    (fallback para o próprio número em caso de falha).
+     *
+     * @param {string|null} [groupId] ID serializado do grupo ("...@g.us").
+     * @returns {Promise<Array<{id: string, number: string, name: string, isAdmin: boolean}>>}
+     *   Lista ordenada por nome.
+     */
     async listarParticipantesGrupo(groupId = null) {
         console.log(`[BOT] listarParticipantesGrupo groupId=${groupId}`);
         if (!this.isReady) {

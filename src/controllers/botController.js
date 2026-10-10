@@ -36,6 +36,12 @@ async function listGroups(request, response) {
     }
 }
 
+/**
+ * GET /api/bot/group-participants?groupId=<id@g.us>
+ * Lista os contatos de um grupo do WhatsApp.
+ * Query `groupId`: ID serializado do grupo. Se omitido, usa o grupo alvo configurado.
+ * Responde com `[{ id, number, name, isAdmin }]`. Erros sobem para o errorHandler.
+ */
 async function listGroupParticipants(request, response) {
     console.log('[CONTROLLER] GET /bot/group-participants:', request.query.groupId);
     try {

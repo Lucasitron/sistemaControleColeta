@@ -1,3 +1,15 @@
+/**
+ * Frontend do painel Copa FabLab (vanilla JS, SPA servida pelo Express).
+ *
+ * Fluxo de contatos do WhatsApp (seção "Grupos e contatos"):
+ * 1. `listGroups()` -> GET /api/bot/groups -> `renderGroups()` popula `#groupSelect`.
+ * 2. Usuário escolhe o grupo; `selectedGroup()` retorna `{ id, name }`.
+ * 3. `loadGroupContacts()` -> GET /api/bot/group-participants?groupId=<id>
+ *    -> `renderGroupContacts()` mostra a prévia em `#groupContactsPreview`.
+ * 4. `importGroupContacts()` -> POST /api/participants (um por contato, sem duplicados).
+ *
+ * Estado global: `state` ({ participants, purchases, groups, groupContacts, dashboard, ... }).
+ */
 const state = {
     participants: [],
     purchases: [],
@@ -410,6 +422,11 @@ function renderPurchases() {
     `).join('');
 }
 
+/**
+ * Renderiza o `<select id="groupSelect">` com os grupos vindos do WhatsApp.
+ * Também atualiza os selects de configuração (coleta/lembretes) via `fillConfigGroupSelects()`.
+ * Cada grupo tem o formato `{ id: string ("...@g.us"), name: string, participants?: number }`.
+ */
 function renderGroups() {
     if (!elements.groupSelect) return;
 
@@ -426,6 +443,11 @@ function renderGroups() {
     fillConfigGroupSelects();
 }
 
+/**
+ * Renderiza a prévia dos contatos do grupo em `#groupContactsPreview`.
+ * Lê `state.groupContacts` (`[{ id, number, name, isAdmin }]`) e exibe até 30 chips.
+ * Estado vazio mostra a mensagem "Nenhum contato carregado."
+ */
 function renderGroupContacts() {
     if (!elements.groupContactsPreview) return;
 
@@ -452,6 +474,10 @@ function renderGroupContacts() {
     `;
 }
 
+/**
+ * Retorna o grupo atualmente selecionado em `#groupSelect`.
+ * @returns {{id: string, name: string}|null} Objeto do grupo ou null se nada selecionado.
+ */
 function selectedGroup() {
     const groupId = elements.groupSelect.value;
     return state.groups.find(group => group.id === groupId) || null;
@@ -696,6 +722,11 @@ async function createReminderFromForm(form) {
     showToast(`Lembrete "${created.title}" criado.`);
 }
 
+/**
+ * Lista os grupos do WhatsApp (`GET /api/bot/groups`) e popula os selects.
+ * Se o bot ainda não estiver pronto, dispara `POST /api/bot/start` e orienta
+ * o usuário a escanear o QR Code antes de tentar de novo.
+ */
 async function listGroups() {
     const status = await api('/api/bot/status');
     setStatus(status);
@@ -714,6 +745,17 @@ async function listGroups() {
     showToast(`${state.groups.length} grupos encontrados.`);
 }
 
+/**
+ * Carrega os contatos (participantes) do grupo selecionado no WhatsApp.
+ *
+ * Fluxo:
+ * 1. Verifica se o bot está conectado (`GET /api/bot/status`).
+ * 2. Obtém o grupo selecionado via `selectedGroup()` ({ id, name }).
+ * 3. Busca os participantes em `GET /api/bot/group-participants?groupId=<id>`.
+ * 4. Renderiza a prévia com `renderGroupContacts()`.
+ *
+ * @throws {Error} Se o WhatsApp não estiver conectado ou nenhum grupo estiver selecionado.
+ */
 async function loadGroupContacts() {
     const status = await api('/api/bot/status');
     setStatus(status);
@@ -726,11 +768,19 @@ async function loadGroupContacts() {
         throw new Error('Selecione um grupo primeiro.');
     }
 
-    state.groupContacts = await api(`/api/bot/group-participants?groupId=${encodeURIComponent(group)}`);
+    // group é um objeto { id, name }; a API espera o ID serializado (ex: "123@g.us").
+    // Enviar o objeto direto resultava em groupId="[object Object]" e nenhum contato retornava.
+    state.groupContacts = await api(`/api/bot/group-participants?groupId=${encodeURIComponent(group.id)}`);
     renderGroupContacts();
     showToast(`${state.groupContacts.length} contatos carregados.`);
 }
 
+/**
+ * Importa `state.groupContacts` como participantes (`POST /api/participants`).
+ * Usa `#importCategory` como categoria padrão, ignora duplicados por
+ * nome (case-insensitive) ou número, e atualiza o dashboard ao final.
+ * @throws {Error} Se nenhum contato foi carregado antes.
+ */
 async function importGroupContacts() {
     if (!state.groupContacts.length) {
         throw new Error('Carregue os contatos do grupo primeiro.');

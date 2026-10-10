@@ -31,6 +31,8 @@ router.post('/justifications', asyncHandler(financialController.toggleJustificat
 router.get('/bot/status', asyncHandler(botController.getStatus));
 router.post('/bot/start', asyncHandler(botController.startBot));
 router.get('/bot/groups', asyncHandler(botController.listGroups));
+// Fluxo de contatos: frontend (selectedGroup -> group.id) -> listGroupParticipants(groupId)
+// -> botService.listGroupParticipants -> ColetaCopaBot.listarParticipantesGrupo.
 router.get('/bot/group-participants', asyncHandler(botController.listGroupParticipants));
 router.post('/bot/charge', asyncHandler(botController.sendIndividualCharge));
 router.post('/bot/campaign', asyncHandler(botController.startCampaign));

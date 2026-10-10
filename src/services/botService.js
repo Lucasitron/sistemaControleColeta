@@ -55,6 +55,13 @@ async function listGroups() {
     }
 }
 
+/**
+ * Lista os participantes de um grupo do WhatsApp.
+ * Garante que o bot esteja pronto (`ensureBotReady`, erro 409 caso contrário)
+ * e delega para `bot.listarParticipantesGrupo(groupId)`.
+ * @param {string} [groupId] ID serializado do grupo ("...@g.us"). Vazio = grupo alvo da config.
+ * @returns {Promise<Array<{id: string, number: string, name: string, isAdmin: boolean}>>}
+ */
 async function listGroupParticipants(groupId) {
     console.log(`[BOT_SERVICE] listGroupParticipants chamado com groupId="${groupId}"`);
     const { bot, config } = await getConfiguredBot();
