@@ -560,7 +560,10 @@ class ColetaCopaBot {
      * 1. Exige `isReady` (bot conectado); senão lança erro.
      * 2. Resolve o ID alvo: usa `groupId` ou `_resolveGroupId()` (grupo da config).
      * 3. Localiza o chat via `getChats()` (com fallback para `getChatById`).
-     * 4. Para cada `participant`, resolve o nome via `getContactById`
+     * 4. Se a lib não devolver participantes, usa `_fetchGroupParticipantsRaw`
+     *    (evaluate direto no contexto da página), que contorna o caso em que
+     *    os wrappers falham e o grupo parecia "não encontrado".
+     * 5. Para cada `participant`, resolve o nome via `getContactById`
      *    (fallback para o próprio número em caso de falha).
      *
      * @param {string|null} [groupId] ID serializado do grupo ("...@g.us").
@@ -604,39 +607,159 @@ class ColetaCopaBot {
             }
         }
 
-        if (!grupoChat) {
+        // Etapa 3: participantes via API do whatsapp-web.js (chat.participants).
+        let participantes = (grupoChat && grupoChat.participants) || [];
+
+        // Etapa 4: fallback via evaluate direto. Necessario quando os wrappers
+        // da lib falham no contexto da pagina (mesmo cenario em que
+        // `listarGrupos()` precisa do fallback para listar grupos), o que
+        // antes fazia esta funcao lancar "Grupo ... nao encontrado" mesmo
+        // existindo.
+        if (!participantes.length) {
+            console.log('[BOT] Participantes vazios via API. Tentando fallback via evaluate...');
+            participantes = await this._fetchGroupParticipantsRaw(targetId);
+            if (participantes.length) {
+                console.log(`[BOT] Fallback retornou ${participantes.length} participantes`);
+            }
+        }
+
+        if (!grupoChat && !participantes.length) {
             throw new Error(`Grupo "${targetId}" nao encontrado.`);
         }
 
-        const participantes = grupoChat.participants || [];
         console.log(`[BOT] ${participantes.length} participantes no grupo`);
 
         const contatos = await Promise.all(participantes.map(async (participant) => {
-            const id = participant.id && participant.id._serialized
-                ? participant.id._serialized
-                : `${participant.id.user}@${participant.id.server || 'c.us'}`;
+            const { id, number } = this._normalizeParticipant(participant);
+
+            if (!id) {
+                return null;
+            }
 
             try {
                 const contact = await this.client.getContactById(id);
                 return {
                     id,
-                    number: participant.id.user,
-                    name: contact.pushname || contact.name || contact.shortName || participant.id.user,
+                    number,
+                    name: contact.pushname || contact.name || contact.shortName || number,
                     isAdmin: Boolean(participant.isAdmin || participant.isSuperAdmin)
                 };
             } catch (error) {
                 console.log(`[BOT] Erro ao buscar contato ${id}: ${error.message}`);
                 return {
                     id,
-                    number: participant.id.user,
-                    name: participant.id.user,
+                    number,
+                    name: number,
                     isAdmin: Boolean(participant.isAdmin || participant.isSuperAdmin)
                 };
             }
         }));
 
-        console.log(`[BOT] ${contatos.length} contatos processados`);
-        return contatos.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const validos = contatos.filter(Boolean);
+        console.log(`[BOT] ${validos.length} contatos processados`);
+        return validos.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+
+    /**
+     * Normaliza um participante de grupo (que pode vir como Wid da lib,
+     * como string serializada ou ja no formato `{ id, number, isAdmin }`)
+     * para `{ id, number }`, onde `id` e o JID serializado ("...@c.us").
+     * @param {object|string} participant
+     * @returns {{id: string|null, number: string|null}}
+     */
+    _normalizeParticipant(participant) {
+        if (!participant) return { id: null, number: null };
+
+        if (typeof participant === 'string') {
+            return { id: participant, number: participant.split('@')[0] };
+        }
+
+        if (participant.idSerialized) {
+            return { id: participant.idSerialized, number: participant.number || participant.idSerialized.split('@')[0] };
+        }
+
+        const rawId = participant.id;
+        if (typeof rawId === 'string') {
+            return { id: rawId, number: participant.number || rawId.split('@')[0] };
+        }
+        if (rawId && rawId._serialized) {
+            return { id: rawId._serialized, number: participant.number || rawId.user || rawId._serialized.split('@')[0] };
+        }
+        if (rawId && rawId.user) {
+            return { id: `${rawId.user}@${rawId.server || 'c.us'}`, number: participant.number || rawId.user };
+        }
+
+        return { id: participant.number ? `${participant.number}@c.us` : null, number: participant.number || null };
+    }
+
+    /**
+     * Busca os participantes de um grupo direto no contexto do navegador
+     * (`pupPage.evaluate`), sem depender dos wrappers de `getChats()`/`getChatById()`.
+     * Usado como ultimo recurso por `listarParticipantesGrupo`.
+     * @param {string} targetId ID serializado do grupo ("...@g.us").
+     * @returns {Promise<Array<{id: string, number: string, isAdmin: boolean}>>}
+     */
+    async _fetchGroupParticipantsRaw(targetId) {
+        const page = this.client.pupPage;
+        if (!page) {
+            console.log('[BOT] _fetchGroupParticipantsRaw: pagina do navegador indisponivel');
+            return [];
+        }
+
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                const result = await page.evaluate(async (chatId) => {
+                    try {
+                        const wid = window.require('WAWebWidFactory').createWid(chatId);
+                        let chat = window.require('WAWebCollections').Chat.get(wid);
+                        if (!chat) {
+                            const res = await window.require('WAWebFindChatAction').findOrCreateLatestChat(wid);
+                            chat = res && res.chat;
+                        }
+                        if (!chat || !chat.groupMetadata) {
+                            return { error: 'groupMetadata indisponivel' };
+                        }
+
+                        const metadata = chat.groupMetadata.serialize();
+                        let toPn = null;
+                        try {
+                            toPn = window.require('WAWebLidMigrationUtils').toPn;
+                        } catch (_) {
+                            toPn = null;
+                        }
+
+                        const participants = (metadata.participants || []).map((p) => {
+                            const pid = (toPn ? toPn(p.id) : null) || p.id;
+                            const serialized = pid && pid._serialized
+                                ? pid._serialized
+                                : (typeof pid === 'string' ? pid : null);
+                            return {
+                                id: serialized,
+                                number: pid && pid.user ? pid.user : (serialized ? serialized.split('@')[0] : null),
+                                isAdmin: Boolean(p.isAdmin || p.isSuperAdmin)
+                            };
+                        }).filter(p => p.id);
+
+                        return { participants };
+                    } catch (e) {
+                        return { error: e.message || String(e) };
+                    }
+                }, targetId);
+
+                if (result && !result.error) {
+                    return result.participants || [];
+                }
+                console.log(`[BOT] _fetchGroupParticipantsRaw tentativa ${attempt}: ${result ? result.error : 'sem resposta'}`);
+            } catch (error) {
+                console.log(`[BOT] _fetchGroupParticipantsRaw tentativa ${attempt} falhou: ${error.message}`);
+            }
+
+            if (attempt < 3) {
+                await new Promise(resolve => setTimeout(resolve, attempt * 1000));
+            }
+        }
+
+        return [];
     }
 
     formatarValor(valor) {
