@@ -258,20 +258,34 @@ class ColetaCopaBot {
                     // Ignore destroy errors
                 }
 
-                const isRecoverable = 
+                const isNetworkError =
+                    error.message.includes('ERR_INTERNET_DISCONNECTED') ||
+                    error.message.includes('ERR_NAME_NOT_RESOLVED') ||
+                    error.message.includes('ERR_CONNECTION') ||
+                    error.message.includes('ERR_NETWORK') ||
+                    error.message.includes('ERR_TIMED_OUT') ||
+                    error.message.includes('net::');
+
+                const isRecoverable =
+                    isNetworkError ||
                     error.message.includes('Execution context was destroyed') ||
                     error.message.includes('already running') ||
                     error.message.includes('Protocol error') ||
                     error.message.includes('Navigation failed') ||
-                    error.message.includes('Target closed') ||
-                    error.message.includes('ERR_TIMED_OUT') ||
-                    error.message.includes('net::');
+                    error.message.includes('Target closed');
 
                 if (!isRecoverable || attempt === maxRetries) {
-                    // On last attempt for recoverable errors, try clearing session
-                    if (isRecoverable && attempt === maxRetries) {
+                    // Nunca apagar a sessao por erro de rede: isso destruiria uma
+                    // sessao valida e forcaria novo QR Code sem necessidade. O
+                    // container pode ficar sem internet temporariamente; ao
+                    // voltar, a sessao existente reconecta sozinha.
+                    if (isRecoverable && !isNetworkError && attempt === maxRetries) {
                         this.log('Todas as tentativas falharam. Limpando sessao corrompida...', 'warn');
-                        await this.limparSessao();
+                        try {
+                            await this.limparSessao();
+                        } catch (clearError) {
+                            this.log(`Nao foi possivel limpar a sessao: ${clearError.message}`, 'warn');
+                        }
                     }
                     break;
                 }
@@ -1036,18 +1050,61 @@ Vamos manter a copa abastecida!`);
         console.log('[BOT] Navegador fechado');
     }
 
+    /**
+     * Apaga a sessao salva do WhatsApp, forcando novo QR Code.
+     *
+     * Importante: `this.sessionDir` e o ponto de montagem de um volume Docker
+     * (`./.wwebjs_auth_nova:/app/.wwebjs_auth_nova`). Remover o proprio
+     * diretorio de montagem falha com `EBUSY`, por isso limpamos apenas o
+     * conteudo. O navegador tambem e encerrado antes, pois pode estar segurando
+     * arquivos (ex: `SingletonLock`).
+     * @returns {Promise<boolean>} true se havia algo para limpar.
+     */
     async limparSessao() {
         console.log(`[BOT] limparSessao: ${this.sessionDir}`);
-        if (fs.existsSync(this.sessionDir)) {
-            console.log('[BOT] Removendo diretorio de sessao...');
-            fs.rmSync(this.sessionDir, { recursive: true, force: true });
-            fs.mkdirSync(this.sessionDir, { recursive: true });
-            console.log('[BOT] Sessao limpa');
-            return true;
+
+        try {
+            await this.client.destroy();
+        } catch (_) {
+            // Ignorado: o cliente pode nao estar inicializado.
+        }
+        await this._killOrphanChrome();
+
+        if (!fs.existsSync(this.sessionDir)) {
+            console.log('[BOT] Diretorio de sessao nao existe');
+            return false;
         }
 
-        console.log('[BOT] Diretorio de sessao nao existe');
-        return false;
+        console.log('[BOT] Removendo conteudo da sessao...');
+        const entries = fs.readdirSync(this.sessionDir);
+        for (const entry of entries) {
+            const target = path.join(this.sessionDir, entry);
+            await this._removeWithRetry(target);
+        }
+        console.log('[BOT] Sessao limpa');
+        return true;
+    }
+
+    /**
+     * Remove arquivo/diretorio tolerando `EBUSY`/`ENOTEMPTY` transitorios
+     * (comum quando o Chrome acabou de ser encerrado e ainda solta arquivos).
+     * @param {string} target Caminho absoluto a remover.
+     */
+    async _removeWithRetry(target) {
+        const delays = [0, 200, 500, 1000];
+        for (let i = 0; i < delays.length; i++) {
+            if (delays[i]) {
+                await new Promise(resolve => setTimeout(resolve, delays[i]));
+            }
+            try {
+                fs.rmSync(target, { recursive: true, force: true });
+                return;
+            } catch (error) {
+                if (i === delays.length - 1) {
+                    console.warn(`[BOT] Falha ao remover ${target}: ${error.message}`);
+                }
+            }
+        }
     }
 }
 
