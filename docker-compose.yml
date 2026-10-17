@@ -3,15 +3,12 @@ services:
     build: .
     container_name: cobrancacopa
     restart: unless-stopped
-    ports:
-      - "1213:1213"
+    network_mode: host
     volumes:
       - ./data:/app/data
       - ./.wwebjs_auth_nova:/app/.wwebjs_auth_nova
       - ./.wwebjs_cache:/app/.wwebjs_cache
-    dns:
-      - 1.1.1.1
-      - 1.0.0.1
+      - ./resolv.conf:/etc/resolv.conf:ro
     environment:
       - PORT=1213
       - NODE_OPTIONS=--dns-result-order=ipv4first
