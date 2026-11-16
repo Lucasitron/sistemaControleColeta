@@ -81,9 +81,27 @@ async function sendIndividualCharge(data) {
     console.log('[BOT_SERVICE] sendIndividualCharge:', JSON.stringify({ number: data.number, name: data.name, amountDue: data.amountDue }));
     const { bot } = await getConfiguredBot();
     ensureBotReady(bot);
-    await bot.enviarCobrancaIndividual(data);
+
+    let participantId = data.participantId ? Number(data.participantId) : null;
+    if (!participantId && data.number) {
+        const participant = await db.findParticipantByWhatsapp(data.number);
+        participantId = participant ? participant.id : null;
+    }
+
+    await bot.enviarCobrancaIndividual({
+        ...data,
+        participantId,
+        monthYear: data.monthYear || new Date().toISOString().slice(0, 7)
+    });
     console.log('[BOT_SERVICE] sendIndividualCharge: enviada');
-    return { ok: true, message: 'Cobranca individual enviada.' };
+    return { ok: true, message: 'Cobranca individual enviada com a enquete de valores.' };
+}
+
+async function syncPolls() {
+    const { bot } = await getConfiguredBot();
+    ensureBotReady(bot);
+    const result = await bot.syncOpenPolls();
+    return { ok: true, ...result };
 }
 
 async function startCampaign() {
@@ -137,5 +155,6 @@ module.exports = {
     sendIndividualCharge,
     startCampaign,
     sendReport,
+    syncPolls,
     clearSession
 };

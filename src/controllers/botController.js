@@ -90,6 +90,17 @@ async function sendReport(request, response) {
     }
 }
 
+async function syncPolls(request, response) {
+    console.log('[CONTROLLER] POST /bot/sync-polls');
+    try {
+        const result = await botService.syncPolls();
+        response.json(result);
+    } catch (error) {
+        console.error('[CONTROLLER] Erro em syncPolls:', error.message);
+        throw error;
+    }
+}
+
 async function clearSession(request, response) {
     console.log('[CONTROLLER] POST /bot/clear-session');
     try {
@@ -110,5 +121,6 @@ module.exports = {
     sendIndividualCharge,
     startCampaign,
     sendReport,
+    syncPolls,
     clearSession
 };

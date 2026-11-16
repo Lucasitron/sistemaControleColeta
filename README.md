@@ -5,11 +5,16 @@ Painel web para gerenciar a contribuição da copa do FabLab. Controla participa
 ## Funcionalidades
 
 - **Gestão de participantes** — cadastro, edição e categorização (professores, bolsistas, usuários frequentes)
-- **Cobrança individual via WhatsApp** — envia lembrete personalizado com valor devido e chave PIX
+- **Cobrança individual via WhatsApp** — mensagem personalizada com valor devido, chave PIX e **enquete de valores** (valor, outro valor/insumos ou justificar ausência)
+- **Confirmação de pagamento em duas enquetes** — o bot pergunta se o pagamento foi realizado e qual valor foi pago antes de marcar como pago
+- **Justificativa de ausência** — ao escolher "Justificar ausência" no privado, o bot pergunta e armazena o motivo
+- **Lista de arrecadação editável** — marque pago, justifique ou volte para pendente manualmente pela interface
+- **Cobrança automática às 08:00** — nos dias configurados (padrão 10 e 15), com aviso prévio no grupo marcando todos
+- **Sobra de caixa entre meses** — o saldo positivo (ou negativo) de meses anteriores é carregado para o mês atual
 - **Campanha de coleta** — dispara mensagens e enquetes no grupo alvo automaticamente
-- **Cobrança automática** — nos dias 10 e 15 de cada mês, cobra automaticamente os pendentes
-- **Dashboard financeiro** — acompanhamento mensal de arrecadação, despesas e saldo
+- **Dashboard financeiro** — acompanhamento mensal de arrecadação, despesas, sobra anterior e saldo
 - **Relatório financeiro** — envio de resumo do mês para o grupo
+- **Comandos no chat pessoal do WhatsApp** — envie mensagens para você mesmo com `registrar compra`, `registrar pagamento`, `registrar justificativa`, `adicionar pessoa`, `retirar pessoa` e `status`
 - **Importação de grupos** — carrega participantes direto de grupos do WhatsApp
 - **Autenticação via QR Code** — escaneie com o WhatsApp para conectar
 
@@ -70,6 +75,29 @@ docker compose up -d --build
 5. Configure valores, PIX e mensagens nas configurações
 6. Dispare **"Campanha"** ou **"Cobranças Individuais"**
 
+### Fluxo de cobrança e confirmação
+
+1. Nos dias configurados, às 08:00, o bot avisa o grupo marcando todos.
+2. Em seguida envia no privado a cobrança com a enquete de valores.
+3. A pessoa marca o valor, "Outro valor / insumos" ou "Justificar ausência".
+4. Se marcou um valor, o bot envia duas enquetes: **Pagamento realizado?** e **Qual valor você pagou?**.
+5. Só depois das duas confirmações o pagamento é registrado e o status vira **pago**.
+6. Se escolheu justificar, o bot pergunta o motivo e o armazena na lista.
+7. Se a pessoa marcou mas não confirmou, você pode editar manualmente na tabela de participantes ou na lista de pendências.
+
+### Comandos no chat "você mesmo"
+
+Envie uma mensagem para o seu próprio contato no WhatsApp:
+
+```text
+registrar compra café 25,90
+registrar pagamento João 20,00
+registrar justificativa João: estava de férias
+adicionar pessoa Maria 5591999999999 bolsista
+retirar pessoa Maria
+status
+```
+
 ## Variáveis de Ambiente
 
 | Variável | Padrão | Descrição |
@@ -96,7 +124,9 @@ docker compose up -d --build
 - `GET /api/purchases` — listar despesas
 - `PUT /api/purchases/:id` — atualizar despesa
 - `DELETE /api/purchases/:id` — remover despesa
-- `POST /api/justifications` — alternar justificativa de participante
+- `POST /api/justifications` — alternar justificativa de participante (com motivo)
+- `GET /api/monthly-status?month=YYYY-MM` — listar status mensal
+- `PUT /api/monthly-status` — editar status mensal manualmente (pago/pendente/justificado)
 
 ### WhatsApp
 - `GET /api/bot/status` — status da conexão
@@ -106,6 +136,7 @@ docker compose up -d --build
 - `POST /api/bot/charge` — enviar cobrança individual
 - `POST /api/bot/campaign` — iniciar campanha de coleta
 - `POST /api/bot/report` — enviar relatório financeiro
+- `POST /api/bot/sync-polls` — sincronizar enquetes abertas manualmente
 - `POST /api/bot/clear-session` — limpar sessão do WhatsApp
 
 ## Licença

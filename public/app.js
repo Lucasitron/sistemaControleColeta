@@ -168,6 +168,8 @@ function fillSettings(settings) {
     document.querySelector('#pixChave').value = settings.pixChave || '';
     document.querySelector('#pixCopiaCola').value = settings.pixCopiaCola || '';
     document.querySelector('#maxOpcoesPorEnquete').value = settings.maxOpcoesPorEnquete || 10;
+    document.querySelector('#diasCobranca').value = settings.diasCobranca || '10,15';
+    document.querySelector('#horarioCobranca').value = settings.horarioCobranca || '08:00';
     
     let valoresText = settings.valoresContribuicao || [];
     if(Array.isArray(valoresText)) valoresText = valoresText.join('; ');
@@ -188,7 +190,9 @@ function readSettingsPayload() {
         pixChave: document.querySelector('#pixChave').value,
         pixCopiaCola: document.querySelector('#pixCopiaCola').value,
         maxOpcoesPorEnquete: document.querySelector('#maxOpcoesPorEnquete').value,
-        valoresContribuicao: valores
+        valoresContribuicao: valores,
+        diasCobranca: document.querySelector('#diasCobranca').value,
+        horarioCobranca: document.querySelector('#horarioCobranca').value
     };
 }
 
@@ -215,6 +219,11 @@ function renderDashboard() {
     
     const balanceEl = document.querySelector('#monthBalance');
     balanceEl.textContent = currency(dashboard.month.netBalance);
+    const carryEl = document.querySelector('#monthCarryOver');
+    if (carryEl) {
+        const carry = Number(dashboard.month.carryOver || 0);
+        carryEl.textContent = `Sobra de meses anteriores: ${currency(carry)} · Disponível: ${currency(dashboard.month.totalAvailable || 0)}`;
+    }
     const balanceCard = document.querySelector('#balanceCard');
     if(dashboard.month.netBalance < 0) {
         balanceCard.classList.add('alert');
@@ -223,7 +232,7 @@ function renderDashboard() {
     }
 
     document.querySelector('#monthPayments').textContent = `${dashboard.month.payments || 0} pagamentos registrados`;
-    document.querySelector('#totalDebtors').textContent = dashboard.debtors.length;
+    document.querySelector('#totalDebtors').textContent = (dashboard.pendingParticipants || []).length;
 
     renderRanking(elements.paidRanking, dashboard.paidRanking, 'Sem arrecadacoes neste mes.', item => ({
         title: item.name,
@@ -315,8 +324,11 @@ function renderPendingPayments() {
                 <select id="quickVal_${p.id}" style="width: auto; padding: 6px; font-size: 0.9rem; border-radius:8px; background:rgba(0,0,0,0.3);">
                     ${options}
                 </select>
-                <button type="button" class="primary" style="padding: 6px 12px; border-radius:8px;" onclick="quickPay(${p.id})">
+                <button type="button" class="primary" style="padding: 6px 12px; border-radius:8px;" onclick="quickPay(${p.id})" title="Marcar como pago">
                     <i class="ph ph-check"></i>
+                </button>
+                <button type="button" class="glass-btn" style="padding: 6px 12px; border-radius:8px;" onclick="toggleJustify(${p.id})" title="Justificar ausência">
+                    <i class="ph ph-shield-check"></i>
                 </button>
             </div>
         </article>
@@ -342,14 +354,75 @@ window.quickPay = async function(participantId) {
 };
 
 window.toggleJustify = async function(participantId) {
+    const participant = state.participants.find(p => p.id === Number(participantId));
+    if (!participant) return;
+    let reason = '';
+    if (participant.status !== 'justified') {
+        const input = window.prompt(`Motivo da ausência de ${participant.name} em ${state.dashboard.month.label}:`, '');
+        if (input === null) return;
+        reason = input.trim();
+        if (!reason) {
+            showToast('Informe o motivo da ausência.');
+            return;
+        }
+    } else if (!window.confirm(`Remover a justificativa de ${participant.name}?`)) {
+        return;
+    }
     try {
         await api('/api/justifications', {
             method: 'POST',
-            body: JSON.stringify({ participantId, monthYear: state.dashboard.month.value })
+            body: JSON.stringify({ participantId, monthYear: state.dashboard.month.value, reason })
         });
         showToast('Status mensal atualizado.');
         refreshDashboard();
     } catch(err) {
+        showToast(err.message);
+    }
+};
+
+window.markPaid = async function(participantId) {
+    const participant = state.participants.find(p => p.id === Number(participantId));
+    if (!participant) return;
+    const suggestion = participant.amountDue || participant.amountExpected || 0;
+    const value = window.prompt(`Valor pago por ${participant.name} em ${state.dashboard.month.label}:`, suggestion || '');
+    if (value === null) return;
+    try {
+        await api('/api/monthly-status', {
+            method: 'PUT',
+            body: JSON.stringify({
+                participantId,
+                monthYear: state.dashboard.month.value,
+                status: 'paid',
+                amountPaid: value,
+                source: 'manual'
+            })
+        });
+        showToast(`${participant.name} marcado(a) como pago.`);
+        refreshDashboard();
+    } catch (err) {
+        showToast(err.message);
+    }
+};
+
+window.markPending = async function(participantId) {
+    const participant = state.participants.find(p => p.id === Number(participantId));
+    if (!participant) return;
+    if (!window.confirm(`Voltar ${participant.name} para pendente em ${state.dashboard.month.label}?`)) return;
+    try {
+        await api('/api/monthly-status', {
+            method: 'PUT',
+            body: JSON.stringify({
+                participantId,
+                monthYear: state.dashboard.month.value,
+                status: 'pending',
+                amountPaid: 0,
+                justificationReason: '',
+                source: 'manual'
+            })
+        });
+        showToast(`${participant.name} voltou para pendente.`);
+        refreshDashboard();
+    } catch (err) {
         showToast(err.message);
     }
 };
@@ -370,9 +443,12 @@ function renderParticipants() {
     elements.participantsTable.innerHTML = rows.map(participant => {
         let statusPill = '<span class="pill due"><i class="ph-fill ph-warning-circle"></i> Pendente</span>';
         if (participant.status === 'paid') {
-            statusPill = '<span class="pill"><i class="ph-fill ph-check-circle"></i> Em dia</span>';
+            statusPill = `<span class="pill"><i class="ph-fill ph-check-circle"></i> Em dia${participant.amountPaid ? ` · ${currency(participant.amountPaid)}` : ''}</span>`;
         } else if (participant.status === 'justified') {
-            statusPill = '<span class="pill" style="background:rgba(59, 130, 246, 0.15); color:#60a5fa; border-color:rgba(59, 130, 246, 0.3);"><i class="ph-fill ph-shield-check"></i> Justificado</span>';
+            const reason = participant.justificationReason ? ` title="${escapeHtml(participant.justificationReason)}"` : '';
+            statusPill = `<span class="pill"${reason} style="background:rgba(59, 130, 246, 0.15); color:#60a5fa; border-color:rgba(59, 130, 246, 0.3);"><i class="ph-fill ph-shield-check"></i> Justificado</span>`;
+        } else if (participant.status === 'awaiting_confirmation') {
+            statusPill = '<span class="pill" style="background:rgba(234, 179, 8, 0.15); color:#facc15; border-color:rgba(234, 179, 8, 0.3);"><i class="ph-fill ph-hourglass"></i> Aguardando confirmação</span>';
         }
 
         const debtorPill = participant.isDebtor
@@ -388,6 +464,8 @@ function renderParticipants() {
             <td>${statusPill}</td>
             <td>${debtorPill}</td>
             <td class="actions">
+                <button data-action="markPaid" data-id="${participant.id}" title="Marcar como pago"><i class="ph ph-check-circle"></i></button>
+                <button data-action="markPending" data-id="${participant.id}" title="Voltar para pendente"><i class="ph ph-arrow-counter-clockwise"></i></button>
                 <button data-action="toggleJustify" data-id="${participant.id}" title="Justificar Ausência neste Mês"><i class="ph ph-shield-check"></i></button>
                 <button data-action="toggleDebtor" data-id="${participant.id}" title="${participant.isDebtor ? 'Remover da lista de devedores' : 'Adicionar à lista de devedores'}"><i class="ph ${participant.isDebtor ? 'ph-check-circle' : 'ph-warning-circle'}"></i></button>
                 <button data-action="edit" data-id="${participant.id}" title="Editar"><i class="ph ph-pencil-simple"></i></button>
@@ -971,6 +1049,18 @@ document.querySelector('#btnSendReport').addEventListener('click', async (e) => 
     }
 });
 
+document.querySelector('#btnSyncPolls').addEventListener('click', async (e) => {
+    try {
+        await withLoading(e.currentTarget, 'Sincronizando...', async () => {
+            const res = await api('/api/bot/sync-polls', { method: 'POST' });
+            showToast(`Enquetes verificadas: ${res.checked || 0}. Processadas: ${res.processed || 0}.`);
+            refreshDashboard();
+        });
+    } catch(err) {
+        showToast(err.message);
+    }
+});
+
 elements.settingsForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const payload = readSettingsPayload();
@@ -1049,7 +1139,9 @@ elements.chargeForm.addEventListener('submit', async (event) => {
                         body: JSON.stringify({
                             number: p.whatsappNumber,
                             name: p.name,
-                            amountDue: p.amountDue
+                            amountDue: p.amountDue,
+                            participantId: p.id,
+                            monthYear: state.dashboard.month.value
                         })
                     }).catch(e => console.error("Erro ao cobrar", p.name, e));
                     sent++;
@@ -1064,7 +1156,9 @@ elements.chargeForm.addEventListener('submit', async (event) => {
                     body: JSON.stringify({
                         number: p.whatsappNumber,
                         name: p.name,
-                        amountDue: p.amountDue
+                        amountDue: p.amountDue,
+                        participantId: p.id,
+                        monthYear: state.dashboard.month.value
                     })
                 });
                 showToast(`Cobrança enviada para ${p.name}.`);
@@ -1129,6 +1223,14 @@ elements.participantsTable.addEventListener('click', async (event) => {
 
     if (button.dataset.action === 'toggleJustify') {
         window.toggleJustify(button.dataset.id);
+    }
+
+    if (button.dataset.action === 'markPaid') {
+        window.markPaid(button.dataset.id);
+    }
+
+    if (button.dataset.action === 'markPending') {
+        window.markPending(button.dataset.id);
     }
 
     if (button.dataset.action === 'toggleDebtor') {

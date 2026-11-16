@@ -44,6 +44,8 @@ const defaultConfig = {
     },
     maxOpcoesPorEnquete: 10,
     grupoAlvo: 'Copa_FabLab',
+    diasCobranca: '10,15',
+    horarioCobranca: '08:00',
     pix: {
         chave: 'santander.lucas.pix@gmail.com',
         copiaCola: '00020126660014br.gov.bcb.pix0129santander.lucas.pix@gmail.com0211Coleta copa5204000053039865802BR5925LUCAS GONCALVES SOARES SO6007TUCURUI62580520SAN2025110112555739250300017br.gov.bcb.brcode01051.0.06304919F'

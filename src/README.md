@@ -75,7 +75,8 @@ Camada de lógica de negócio. Orquestra operações entre o banco e o WhatsApp.
 | `financialService.js` | Repassa operações financeiras para o banco |
 | `participantService.js` | Valida e repassa operações de participantes |
 | `reportService.js` | Constrói relatório financeiro formatado para WhatsApp |
-| `autoChargeService.js` | Job que roda a cada hora e dispara cobranças automáticas nos dias 10 e 15 |
+| `autoChargeService.js` | Job que roda a cada 30s e dispara cobranças automáticas no horário/dias configurados (padrão 08:00 nos dias 10 e 15), avisando o grupo antes |
+| `commandService.js` | Interpreta comandos enviados no chat pessoal (compras, pagamentos, justificativas, adicionar/retirar pessoa) |
 
 ## `db/database.js`
 
@@ -91,9 +92,12 @@ Camada de acesso a dados com SQLite. Gerencia:
 settings (key TEXT PK, value TEXT)
 participants (id INTEGER PK, name, category, is_debtor, whatsapp_number, amount_due, created_at)
 campaigns (id INTEGER PK, group_name, status, message, started_at, finished_at)
-payments (id INTEGER PK, participant_id FK, participant_name, amount, paid_at, source)
+payments (id INTEGER PK, participant_id FK, participant_name, amount, paid_at, source, reference)
 purchases (id INTEGER PK, description, amount, purchase_date)
-justifications (participant_id PK FK, month_year PK)
+justifications (participant_id PK FK, month_year PK, reason, source, updated_at)
+monthly_status (participant_id, month_year, status, amount_paid, amount_expected, justification_reason, note, source, confirmed_at)
+poll_tracking (message_id, chat_id, participant_id, month_year, kind, flow_key, status, selected_option, amount)
+bot_states (chat_id, participant_id, month_year, action, payload, expires_at)
 ```
 
 ## `middleware/errorHandler.js`

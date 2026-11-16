@@ -119,6 +119,76 @@ class Database {
             )
         `);
 
+        await this.ensureColumn('justifications', 'reason', 'TEXT');
+        await this.ensureColumn('justifications', 'source', "TEXT NOT NULL DEFAULT 'manual'");
+        await this.ensureColumn('justifications', 'updated_at', 'TEXT');
+
+        // Status mensal explicito: permite que o bot marque "aguardando
+        // confirmacao", "pago" ou "justificado" sem depender apenas da
+        // existencia de um pagamento. Tambem e a base da lista de arrecadacao
+        // que pode ser editada manualmente pela interface.
+        await this.run(`
+            CREATE TABLE IF NOT EXISTS monthly_status (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                participant_id INTEGER NOT NULL,
+                month_year TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending'
+                    CHECK(status IN ('pending', 'awaiting_confirmation', 'paid', 'justified')),
+                amount_paid REAL NOT NULL DEFAULT 0,
+                amount_expected REAL NOT NULL DEFAULT 0,
+                justification_reason TEXT,
+                note TEXT,
+                source TEXT NOT NULL DEFAULT 'manual',
+                confirmed_at TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(participant_id, month_year),
+                FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
+            )
+        `);
+
+        // Cada enquete enviada (cobranca ou confirmacao de pagamento) fica
+        // registrada para que o bot consiga correlacionar o voto recebido
+        // pela lib com o participante/mes certos.
+        await this.run(`
+            CREATE TABLE IF NOT EXISTS poll_tracking (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id TEXT UNIQUE,
+                chat_id TEXT NOT NULL DEFAULT '',
+                participant_id INTEGER,
+                participant_number TEXT,
+                month_year TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                flow_key TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'open',
+                selected_option TEXT,
+                amount REAL,
+                note TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
+            )
+        `);
+
+        // Estado de conversa (ex: aguardando motivo da ausencia ou valor
+        // personalizado). Expira para nao prender a pessoa em um fluxo antigo.
+        await this.run(`
+            CREATE TABLE IF NOT EXISTS bot_states (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chat_id TEXT NOT NULL,
+                participant_id INTEGER,
+                month_year TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL,
+                payload TEXT,
+                expires_at TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(chat_id, action),
+                FOREIGN KEY (participant_id) REFERENCES participants(id) ON DELETE CASCADE
+            )
+        `);
+
+        await this.ensureColumn('payments', 'reference', 'TEXT');
+        await this.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_payments_reference ON payments(reference) WHERE reference IS NOT NULL');
+
         await this.run(`
             CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,6 +239,8 @@ class Database {
         await this.saveSetting('pixCopiaCola', defaultConfig.pix.copiaCola);
         await this.saveSetting('maxOpcoesPorEnquete', String(defaultConfig.maxOpcoesPorEnquete));
         await this.saveSetting('valoresContribuicao', JSON.stringify(defaultConfig.valoresContribuicao));
+        await this.saveSetting('diasCobranca', String(defaultConfig.diasCobranca || '10,15'));
+        await this.saveSetting('horarioCobranca', String(defaultConfig.horarioCobranca || '08:00'));
 
         for (const category of ['professores', 'bolsistas', 'usuariosFrequentes']) {
             for (const name of defaultConfig.nomes[category]) {
@@ -199,7 +271,24 @@ class Database {
     }
 
     async updateSettings(settings) {
-        const allowedKeys = ['grupoAlvo', 'grupoColeta', 'grupoLembretes', 'pixChave', 'pixCopiaCola', 'maxOpcoesPorEnquete', 'valoresContribuicao'];
+        const allowedKeys = ['grupoAlvo', 'grupoColeta', 'grupoLembretes', 'pixChave', 'pixCopiaCola', 'maxOpcoesPorEnquete', 'valoresContribuicao', 'diasCobranca', 'horarioCobranca'];
+        if (Object.prototype.hasOwnProperty.call(settings, 'diasCobranca')) {
+            const days = String(settings.diasCobranca || '')
+                .split(/[,\s;]+/)
+                .map(Number)
+                .filter(day => Number.isInteger(day) && day >= 1 && day <= 31);
+            if (!days.length) {
+                throw new Error('Informe ao menos um dia valido (1 a 31) para a cobranca automatica.');
+            }
+            settings = { ...settings, diasCobranca: [...new Set(days)].sort((a, b) => a - b).join(',') };
+        }
+        if (Object.prototype.hasOwnProperty.call(settings, 'horarioCobranca')) {
+            const time = String(settings.horarioCobranca || '').trim();
+            if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) {
+                throw new Error('Horario da cobranca invalido. Use HH:MM (ex: 08:00).');
+            }
+            settings = { ...settings, horarioCobranca: time };
+        }
         for (const key of allowedKeys) {
             if (Object.prototype.hasOwnProperty.call(settings, key)) {
                 const value = Array.isArray(settings[key]) ? JSON.stringify(settings[key]) : String(settings[key] ?? '');
@@ -505,6 +594,22 @@ class Database {
         return { ok: true };
     }
 
+    normalizeContributionValues(list) {
+        const items = (Array.isArray(list) ? list : String(list || '').split(/[;,]/))
+            .map(value => String(value || '').trim())
+            .filter(Boolean);
+        const merged = [];
+        for (const item of items) {
+            const previous = merged[merged.length - 1];
+            if (/^\d{2}$/.test(item) && previous && /r\$\s*\d+[.,]?$/i.test(previous)) {
+                merged[merged.length - 1] = `${previous.replace(/[.,]$/, '')},${item}`;
+                continue;
+            }
+            merged.push(item);
+        }
+        return merged.filter(item => item !== '00');
+    }
+
     async getBotConfig() {
         const settings = await this.getSettings();
         const participants = await this.getParticipants();
@@ -535,9 +640,13 @@ class Database {
                 chave: settings.pixChave || defaultConfig.pix.chave,
                 copiaCola: settings.pixCopiaCola || defaultConfig.pix.copiaCola
             },
-            valoresContribuicao: settings.valoresContribuicao
-                ? JSON.parse(settings.valoresContribuicao)
-                : defaultConfig.valoresContribuicao
+            valoresContribuicao: this.normalizeContributionValues(
+                settings.valoresContribuicao
+                    ? JSON.parse(settings.valoresContribuicao)
+                    : defaultConfig.valoresContribuicao
+            ),
+            diasCobranca: settings.diasCobranca || String(defaultConfig.diasCobranca || '10,15'),
+            horarioCobranca: settings.horarioCobranca || String(defaultConfig.horarioCobranca || '08:00')
         };
     }
 
@@ -565,6 +674,288 @@ class Database {
         return await this.all('SELECT * FROM campaigns ORDER BY started_at DESC LIMIT 20');
     }
 
+    monthKeyFromDate(value = new Date()) {
+        const date = value instanceof Date ? value : new Date(value);
+        if (Number.isNaN(date.getTime())) {
+            return new Date().toISOString().slice(0, 7);
+        }
+        return date.toISOString().slice(0, 7);
+    }
+
+    monthBounds(monthYear) {
+        const value = String(monthYear || this.monthKeyFromDate());
+        const [year, month] = value.split('-').map(Number);
+        const nextMonth = month === 12 ? 1 : month + 1;
+        const nextYear = month === 12 ? year + 1 : year;
+        return {
+            value,
+            start: `${value}-01T00:00:00.000Z`,
+            end: `${nextYear}-${String(nextMonth).padStart(2, '0')}-01T00:00:00.000Z`
+        };
+    }
+
+    normalizeName(value) {
+        return String(value || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    async findParticipantByName(name) {
+        const participants = await this.getParticipants();
+        const target = this.normalizeName(name);
+        if (!target) return null;
+        return participants.find(p => this.normalizeName(p.name) === target)
+            || participants.find(p => this.normalizeName(p.name).startsWith(target))
+            || participants.find(p => this.normalizeName(p.name).includes(target))
+            || participants.find(p => target.includes(this.normalizeName(p.name)))
+            || null;
+    }
+
+    async findParticipantByWhatsapp(number) {
+        const digits = String(number || '').replace(/\D/g, '');
+        if (!digits) return null;
+        const participants = await this.getParticipants();
+        return participants.find(p => String(p.whatsappNumber || '').replace(/\D/g, '') === digits)
+            || participants.find(p => {
+                const pDigits = String(p.whatsappNumber || '').replace(/\D/g, '');
+                return pDigits && (pDigits.endsWith(digits) || digits.endsWith(pDigits));
+            })
+            || null;
+    }
+
+    async getMonthlyStatus(participantId, monthYear) {
+        return await this.get(
+            `SELECT id,
+                    participant_id AS participantId,
+                    month_year AS monthYear,
+                    status,
+                    amount_paid AS amountPaid,
+                    amount_expected AS amountExpected,
+                    justification_reason AS justificationReason,
+                    note,
+                    source,
+                    confirmed_at AS confirmedAt,
+                    updated_at AS updatedAt
+             FROM monthly_status
+             WHERE participant_id = ? AND month_year = ?`,
+            [participantId, monthYear]
+        );
+    }
+
+    async listMonthlyStatus(monthYear) {
+        return await this.all(
+            `SELECT id,
+                    participant_id AS participantId,
+                    month_year AS monthYear,
+                    status,
+                    amount_paid AS amountPaid,
+                    amount_expected AS amountExpected,
+                    justification_reason AS justificationReason,
+                    note,
+                    source,
+                    confirmed_at AS confirmedAt,
+                    updated_at AS updatedAt
+             FROM monthly_status
+             WHERE month_year = ?`,
+            [monthYear]
+        );
+    }
+
+    async upsertMonthlyStatus(data) {
+        const participantId = Number(data.participantId);
+        const monthYear = String(data.monthYear || '').trim();
+        const status = String(data.status || 'pending');
+        const allowed = ['pending', 'awaiting_confirmation', 'paid', 'justified'];
+        if (!Number.isInteger(participantId) || participantId <= 0) {
+            throw new Error('Participante invalido para status mensal.');
+        }
+        if (!/^\d{4}-\d{2}$/.test(monthYear)) {
+            throw new Error('Mes invalido. Use o formato YYYY-MM.');
+        }
+        if (!allowed.includes(status)) {
+            throw new Error('Status mensal invalido.');
+        }
+
+        const current = await this.getMonthlyStatus(participantId, monthYear);
+        const amountPaid = data.amountPaid !== undefined
+            ? Math.max(0, Number(data.amountPaid) || 0)
+            : (current ? current.amountPaid : 0);
+        const amountExpected = data.amountExpected !== undefined
+            ? Math.max(0, Number(data.amountExpected) || 0)
+            : (current ? current.amountExpected : 0);
+        const reason = data.justificationReason !== undefined
+            ? String(data.justificationReason || '')
+            : (current ? current.justificationReason : '');
+        const note = data.note !== undefined
+            ? String(data.note || '')
+            : (current ? current.note : '');
+        const source = data.source !== undefined
+            ? String(data.source || 'manual')
+            : (current ? current.source : 'manual');
+        const confirmedAt = data.confirmedAt !== undefined
+            ? data.confirmedAt
+            : (current ? current.confirmedAt : null);
+
+        await this.run(
+            `INSERT INTO monthly_status
+                (participant_id, month_year, status, amount_paid, amount_expected,
+                 justification_reason, note, source, confirmed_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+             ON CONFLICT(participant_id, month_year) DO UPDATE SET
+                status = excluded.status,
+                amount_paid = excluded.amount_paid,
+                amount_expected = excluded.amount_expected,
+                justification_reason = excluded.justification_reason,
+                note = excluded.note,
+                source = excluded.source,
+                confirmed_at = excluded.confirmed_at,
+                updated_at = CURRENT_TIMESTAMP`,
+            [participantId, monthYear, status, amountPaid, amountExpected, reason, note, source, confirmedAt]
+        );
+        return await this.getMonthlyStatus(participantId, monthYear);
+    }
+
+    /**
+     * Recalcula o status mensal a partir das fontes de verdade (pagamentos e
+     * justificativas), preservando "aguardando confirmacao" quando o bot ja
+     * recebeu a marcacao mas a pessoa ainda nao confirmou o pagamento.
+     */
+    async recalculateMonthlyStatus(participantId, monthYear) {
+        const bounds = this.monthBounds(monthYear);
+        const totalRow = await this.get(
+            `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+             FROM payments
+             WHERE participant_id = ? AND paid_at >= ? AND paid_at < ?`,
+            [participantId, bounds.start, bounds.end]
+        );
+        const justification = await this.get(
+            'SELECT reason FROM justifications WHERE participant_id = ? AND month_year = ?',
+            [participantId, monthYear]
+        );
+        const current = await this.getMonthlyStatus(participantId, monthYear);
+
+        if (Number(totalRow?.count || 0) > 0) {
+            return await this.upsertMonthlyStatus({
+                participantId,
+                monthYear,
+                status: 'paid',
+                amountPaid: Number(totalRow.total || 0),
+                amountExpected: current ? current.amountExpected : 0,
+                justificationReason: '',
+                note: current ? current.note : '',
+                source: current ? current.source : 'payment',
+                confirmedAt: current?.confirmedAt || new Date().toISOString()
+            });
+        }
+
+        if (justification) {
+            return await this.upsertMonthlyStatus({
+                participantId,
+                monthYear,
+                status: 'justified',
+                amountPaid: 0,
+                amountExpected: current ? current.amountExpected : 0,
+                justificationReason: justification.reason || (current ? current.justificationReason : ''),
+                note: current ? current.note : '',
+                source: current ? current.source : 'manual',
+                confirmedAt: current?.confirmedAt || new Date().toISOString()
+            });
+        }
+
+        if (current && current.status === 'awaiting_confirmation') {
+            return current;
+        }
+
+        return await this.upsertMonthlyStatus({
+            participantId,
+            monthYear,
+            status: 'pending',
+            amountPaid: 0,
+            amountExpected: current ? current.amountExpected : 0,
+            justificationReason: '',
+            note: current ? current.note : '',
+            source: current ? current.source : 'manual',
+            confirmedAt: null
+        });
+    }
+
+    async setMonthlyStatus(data) {
+        const participantId = Number(data.participantId);
+        const monthYear = String(data.monthYear || '').trim();
+        if (!/^\d{4}-\d{2}$/.test(monthYear)) {
+            throw new Error('Mes invalido. Use o formato YYYY-MM.');
+        }
+        if (data.status === 'paid') {
+            const bounds = this.monthBounds(monthYear);
+            const payments = await this.get(
+                `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
+                 FROM payments
+                 WHERE participant_id = ? AND paid_at >= ? AND paid_at < ?`,
+                [participantId, bounds.start, bounds.end]
+            );
+            let amountPaid = data.amountPaid !== undefined
+                ? Number(data.amountPaid) || 0
+                : Number(payments?.total || 0);
+
+            if (Number(payments?.count || 0) > 0) {
+                amountPaid = Number(payments.total || 0);
+            }
+
+            // Edicao manual da lista: se ainda nao existe pagamento registrado
+            // no mes, cria a arrecadacao para que os totais do dashboard
+            // tambem reflitam o valor informado.
+            if (Number(payments?.count || 0) === 0 && amountPaid > 0) {
+                const participant = await this.getParticipant(participantId);
+                if (!participant) {
+                    throw new Error('Participante nao encontrado.');
+                }
+                const paidAt = monthYear === this.monthKeyFromDate()
+                    ? new Date().toISOString()
+                    : `${monthYear}-15T12:00:00.000Z`;
+                await this.createPayment({
+                    participantId,
+                    participantName: participant.name,
+                    amount: amountPaid,
+                    paidAt,
+                    source: data.source || 'manual',
+                    reference: `manual-status:${participantId}:${monthYear}`
+                });
+                return await this.getMonthlyStatus(participantId, monthYear);
+            }
+
+            return await this.upsertMonthlyStatus({
+                ...data,
+                participantId,
+                status: 'paid',
+                amountPaid: amountPaid || Number(payments?.total || 0),
+                confirmedAt: data.confirmedAt || new Date().toISOString()
+            });
+        }
+        // Edicao manual "voltar para pendente": remove o que foi criado pela
+        // propria edicao manual (pagamento manual-status e justificativa) para
+        // que a lista reflita o status escolhido. Pagamentos reais e de
+        // enquete sao preservados de proposito.
+        if (data.status === 'pending') {
+            await this.run(
+                'DELETE FROM payments WHERE participant_id = ? AND reference = ?',
+                [participantId, `manual-status:${participantId}:${monthYear}`]
+            );
+            await this.removeJustification(participantId, monthYear);
+            return await this.upsertMonthlyStatus({
+                ...data,
+                participantId,
+                status: 'pending',
+                amountPaid: 0,
+                justificationReason: '',
+                confirmedAt: null
+            });
+        }
+        return await this.upsertMonthlyStatus({ ...data, participantId });
+    }
+
     async createPayment(data) {
         const amount = Number(data.amount);
         if (!Number.isFinite(amount) || amount <= 0) {
@@ -584,17 +975,23 @@ class Database {
             throw new Error('Informe o participante da arrecadacao.');
         }
 
+        const paidAt = data.paidAt || new Date().toISOString();
         const result = await this.run(
-            `INSERT INTO payments (participant_id, participant_name, amount, paid_at, source)
-             VALUES (?, ?, ?, ?, ?)`,
+            `INSERT INTO payments (participant_id, participant_name, amount, paid_at, source, reference)
+             VALUES (?, ?, ?, ?, ?, ?)`,
             [
                 participant ? participant.id : null,
                 participantName,
                 amount,
-                data.paidAt || new Date().toISOString(),
-                data.source || 'manual'
+                paidAt,
+                data.source || 'manual',
+                data.reference || null
             ]
         );
+
+        if (participant) {
+            await this.recalculateMonthlyStatus(participant.id, this.monthKeyFromDate(paidAt));
+        }
 
         return await this.get(
             `SELECT id,
@@ -602,7 +999,8 @@ class Database {
                     participant_name AS participantName,
                     amount,
                     paid_at AS paidAt,
-                    source
+                    source,
+                    reference
              FROM payments
              WHERE id = ?`,
             [result.id]
@@ -616,14 +1014,36 @@ class Database {
                     participant_name AS participantName,
                     amount,
                     paid_at AS paidAt,
-                    source
+                    source,
+                    reference
              FROM payments
              WHERE id = ?`,
             [id]
         );
     }
 
+    async getPaymentByReference(reference) {
+        if (!reference) return null;
+        return await this.get(
+            `SELECT id,
+                    participant_id AS participantId,
+                    participant_name AS participantName,
+                    amount,
+                    paid_at AS paidAt,
+                    source,
+                    reference
+             FROM payments
+             WHERE reference = ?`,
+            [reference]
+        );
+    }
+
     async updatePayment(id, data) {
+        const current = await this.getPayment(id);
+        if (!current) {
+            throw new Error('Arrecadacao nao encontrada.');
+        }
+
         const amount = Number(data.amount);
         if (!Number.isFinite(amount) || amount <= 0) {
             throw new Error('Valor da arrecadacao invalido.');
@@ -651,7 +1071,8 @@ class Database {
                  participant_name = ?,
                  amount = ?,
                  paid_at = ?,
-                 source = ?
+                 source = ?,
+                 reference = ?
              WHERE id = ?`,
             [
                 participant ? participant.id : null,
@@ -659,6 +1080,7 @@ class Database {
                 amount,
                 data.paidAt || new Date().toISOString(),
                 data.source || 'manual',
+                data.reference !== undefined ? data.reference : (current.reference || null),
                 id
             ]
         );
@@ -668,13 +1090,24 @@ class Database {
             throw new Error('Arrecadacao nao encontrada.');
         }
 
+        if (current.participantId) {
+            await this.recalculateMonthlyStatus(current.participantId, this.monthKeyFromDate(current.paidAt));
+        }
+        if (payment.participantId) {
+            await this.recalculateMonthlyStatus(payment.participantId, this.monthKeyFromDate(payment.paidAt));
+        }
+
         return payment;
     }
 
     async deletePayment(id) {
+        const current = await this.getPayment(id);
         const result = await this.run('DELETE FROM payments WHERE id = ?', [id]);
         if (!result.changes) {
             throw new Error('Arrecadacao nao encontrada.');
+        }
+        if (current && current.participantId) {
+            await this.recalculateMonthlyStatus(current.participantId, this.monthKeyFromDate(current.paidAt));
         }
         return result;
     }
@@ -756,30 +1189,261 @@ class Database {
         return result;
     }
 
-    async toggleJustification(participantId, monthYear) {
+    async setJustification(participantId, monthYear, reason = '', source = 'manual') {
+        const participant = await this.getParticipant(participantId);
+        if (!participant) {
+            throw new Error('Participante nao encontrado.');
+        }
+        await this.run('DELETE FROM justifications WHERE participant_id = ? AND month_year = ?', [participantId, monthYear]);
+        await this.run(
+            `INSERT INTO justifications (participant_id, month_year, reason, source, updated_at)
+             VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+            [participantId, monthYear, String(reason || '').trim(), source]
+        );
+        await this.recalculateMonthlyStatus(participantId, monthYear);
+        return { justified: true, reason: String(reason || '').trim() };
+    }
+
+    async removeJustification(participantId, monthYear) {
+        await this.run('DELETE FROM justifications WHERE participant_id = ? AND month_year = ?', [participantId, monthYear]);
+        await this.recalculateMonthlyStatus(participantId, monthYear);
+        return { justified: false };
+    }
+
+    async toggleJustification(participantId, monthYear, reason = '') {
         const existing = await this.get(
             'SELECT * FROM justifications WHERE participant_id = ? AND month_year = ?',
             [participantId, monthYear]
         );
         if (existing) {
-            await this.run('DELETE FROM justifications WHERE participant_id = ? AND month_year = ?', [participantId, monthYear]);
-            return { justified: false };
+            return await this.removeJustification(participantId, monthYear);
+        }
+        return await this.setJustification(participantId, monthYear, reason, 'manual');
+    }
+
+    async createPollTracking(data) {
+        if (!data.messageId) {
+            throw new Error('Enquete sem messageId nao pode ser rastreada.');
+        }
+        const result = await this.run(
+            `INSERT OR IGNORE INTO poll_tracking
+                (message_id, chat_id, participant_id, participant_number, month_year,
+                 kind, flow_key, status, selected_option, amount, note)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                data.messageId,
+                data.chatId || '',
+                data.participantId || null,
+                data.participantNumber || null,
+                data.monthYear,
+                data.kind,
+                data.flowKey || '',
+                data.status || 'open',
+                data.selectedOption || null,
+                data.amount !== undefined && data.amount !== null ? Number(data.amount) : null,
+                data.note || null
+            ]
+        );
+        if (result.id) {
+            return await this.getPollTracking(result.id);
+        }
+        return await this.getPollTrackingByMessageId(data.messageId);
+    }
+
+    mapPollTrackingRow(row) {
+        if (!row) return row;
+        return {
+            ...row,
+            amount: row.amount === null || row.amount === undefined ? null : Number(row.amount)
+        };
+    }
+
+    async getPollTracking(id) {
+        const row = await this.get(
+            `SELECT id,
+                    message_id AS messageId,
+                    chat_id AS chatId,
+                    participant_id AS participantId,
+                    participant_number AS participantNumber,
+                    month_year AS monthYear,
+                    kind,
+                    flow_key AS flowKey,
+                    status,
+                    selected_option AS selectedOption,
+                    amount,
+                    note,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
+             FROM poll_tracking
+             WHERE id = ?`,
+            [id]
+        );
+        return this.mapPollTrackingRow(row);
+    }
+
+    async getPollTrackingByMessageId(messageId) {
+        const row = await this.get(
+            `SELECT id,
+                    message_id AS messageId,
+                    chat_id AS chatId,
+                    participant_id AS participantId,
+                    participant_number AS participantNumber,
+                    month_year AS monthYear,
+                    kind,
+                    flow_key AS flowKey,
+                    status,
+                    selected_option AS selectedOption,
+                    amount,
+                    note,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
+             FROM poll_tracking
+             WHERE message_id = ?`,
+            [messageId]
+        );
+        return this.mapPollTrackingRow(row);
+    }
+
+    async getPollsByFlow(flowKey) {
+        const rows = await this.all(
+            `SELECT id,
+                    message_id AS messageId,
+                    chat_id AS chatId,
+                    participant_id AS participantId,
+                    participant_number AS participantNumber,
+                    month_year AS monthYear,
+                    kind,
+                    flow_key AS flowKey,
+                    status,
+                    selected_option AS selectedOption,
+                    amount,
+                    note,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
+             FROM poll_tracking
+             WHERE flow_key = ?
+             ORDER BY id ASC`,
+            [flowKey]
+        );
+        return rows.map(row => this.mapPollTrackingRow(row));
+    }
+
+    async updatePollTracking(id, data) {
+        const allowed = ['status', 'selected_option', 'amount', 'note', 'chat_id'];
+        const sets = [];
+        const params = [];
+        for (const key of allowed) {
+            if (Object.prototype.hasOwnProperty.call(data, key)) {
+                sets.push(`${key} = ?`);
+                params.push(data[key]);
+            }
+        }
+        if (!sets.length) {
+            return await this.getPollTracking(id);
+        }
+        params.push(id);
+        await this.run(
+            `UPDATE poll_tracking SET ${sets.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+            params
+        );
+        return await this.getPollTracking(id);
+    }
+
+    async getOpenPolls(days = 30) {
+        const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+        const rows = await this.all(
+            `SELECT id,
+                    message_id AS messageId,
+                    chat_id AS chatId,
+                    participant_id AS participantId,
+                    participant_number AS participantNumber,
+                    month_year AS monthYear,
+                    kind,
+                    flow_key AS flowKey,
+                    status,
+                    selected_option AS selectedOption,
+                    amount,
+                    note,
+                    created_at AS createdAt,
+                    updated_at AS updatedAt
+             FROM poll_tracking
+             WHERE created_at >= ?
+               AND status NOT IN ('completed', 'cancelled')
+             ORDER BY id ASC`,
+            [since]
+        );
+        return rows.map(row => this.mapPollTrackingRow(row));
+    }
+
+    async setBotState(data) {
+        const expiresAt = data.expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+        await this.run(
+            `INSERT INTO bot_states (chat_id, participant_id, month_year, action, payload, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(chat_id, action) DO UPDATE SET
+                participant_id = excluded.participant_id,
+                month_year = excluded.month_year,
+                payload = excluded.payload,
+                expires_at = excluded.expires_at`,
+            [
+                data.chatId,
+                data.participantId || null,
+                data.monthYear || '',
+                data.action,
+                typeof data.payload === 'string' ? data.payload : JSON.stringify(data.payload || {}),
+                expiresAt
+            ]
+        );
+        return await this.getBotState(data.chatId, data.action);
+    }
+
+    async getBotState(chatId, action = null) {
+        const params = [chatId];
+        let sql = `SELECT id,
+                          chat_id AS chatId,
+                          participant_id AS participantId,
+                          month_year AS monthYear,
+                          action,
+                          payload,
+                          expires_at AS expiresAt
+                   FROM bot_states
+                   WHERE chat_id = ?`;
+        if (action) {
+            sql += ' AND action = ?';
+            params.push(action);
+        }
+        sql += ' ORDER BY id DESC LIMIT 1';
+        const row = await this.get(sql, params);
+        if (!row) return null;
+        if (row.expiresAt && new Date(row.expiresAt).getTime() < Date.now()) {
+            await this.clearBotState(row.chatId, row.action);
+            return null;
+        }
+        try {
+            row.payload = row.payload ? JSON.parse(row.payload) : {};
+        } catch (_) {
+            row.payload = {};
+        }
+        return row;
+    }
+
+    async clearBotState(chatId, action = null) {
+        if (action) {
+            await this.run('DELETE FROM bot_states WHERE chat_id = ? AND action = ?', [chatId, action]);
         } else {
-            await this.run('INSERT INTO justifications (participant_id, month_year) VALUES (?, ?)', [participantId, monthYear]);
-            return { justified: true };
+            await this.run('DELETE FROM bot_states WHERE chat_id = ?', [chatId]);
         }
     }
 
     async getDashboard(monthParam) {
         // monthParam should be 'YYYY-MM'. If not provided, use current month.
-        const targetDate = monthParam ? new Date(`${monthParam}-01T12:00:00Z`) : new Date();
-        const monthYearStr = `${targetDate.getFullYear()}-${String(targetDate.getMonth() + 1).padStart(2, '0')}`;
-        
-        const monthStart = `${monthYearStr}-01T00:00:00.000Z`;
-        const [yearNum, monthNum] = monthYearStr.split('-').map(Number);
-        const nextM = monthNum === 12 ? 1 : monthNum + 1;
-        const nextY = monthNum === 12 ? yearNum + 1 : yearNum;
-        const monthEnd = `${nextY}-${String(nextM).padStart(2, '0')}-01T00:00:00.000Z`;
+        const monthYearStr = /^\d{4}-\d{2}$/.test(String(monthParam || ''))
+            ? String(monthParam)
+            : new Date().toISOString().slice(0, 7);
+        const bounds = this.monthBounds(monthYearStr);
+        const monthStart = bounds.start;
+        const monthEnd = bounds.end;
+        const targetDate = new Date(`${monthYearStr}-01T12:00:00Z`);
 
         const totalRow = await this.get(
             `SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS count
@@ -794,6 +1458,17 @@ class Database {
              WHERE purchase_date >= ? AND purchase_date < ?`,
             [monthStart, monthEnd]
         );
+
+        // Sobra de meses anteriores: tudo o que entrou antes do mes atual
+        // menos tudo o que foi gasto antes dele. O valor transita mes a mes,
+        // sem duplicar (sempre acumulado ate o inicio do mes selecionado).
+        const carryRow = await this.get(
+            `SELECT
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE paid_at < ?) AS collectedBefore,
+                (SELECT COALESCE(SUM(amount), 0) FROM purchases WHERE purchase_date < ?) AS purchasesBefore`,
+            [monthStart, monthStart]
+        );
+        const carryOver = Number(carryRow?.collectedBefore || 0) - Number(carryRow?.purchasesBefore || 0);
 
         const purchases = await this.all(
             `SELECT id, description, amount, purchase_date AS purchaseDate
@@ -827,46 +1502,69 @@ class Database {
             [monthStart, monthEnd]
         );
 
-        // Find pending participants dynamically for the selected month
-        // A participant is pending if they haven't paid in the selected month AND are not justified.
+        // Status do mes: pagamento registrado, justificativa ou o status
+        // explicito salvo em monthly_status (inclusive "aguardando confirmacao").
         const allParticipants = await this.getParticipants();
-        
+
         const paymentsInMonth = await this.all(
-            `SELECT DISTINCT participant_id 
-             FROM payments 
-             WHERE paid_at >= ? AND paid_at < ? AND participant_id IS NOT NULL`,
+            `SELECT participant_id, COALESCE(SUM(amount), 0) AS total
+             FROM payments
+             WHERE paid_at >= ? AND paid_at < ? AND participant_id IS NOT NULL
+             GROUP BY participant_id`,
             [monthStart, monthEnd]
         );
+        const paidTotals = new Map(paymentsInMonth.map(p => [p.participant_id, Number(p.total || 0)]));
         const paidParticipantIds = new Set(paymentsInMonth.map(p => p.participant_id));
 
         const justifications = await this.all(
-            `SELECT participant_id FROM justifications WHERE month_year = ?`,
+            `SELECT participant_id, reason FROM justifications WHERE month_year = ?`,
             [monthYearStr]
         );
-        const justifiedIds = new Set(justifications.map(j => j.participant_id));
+        const justificationMap = new Map(justifications.map(j => [j.participant_id, j.reason || '']));
+
+        const monthlyRows = await this.listMonthlyStatus(monthYearStr);
+        const monthlyMap = new Map(monthlyRows.map(row => [row.participantId, row]));
 
         const debtors = [];
         const pendingForQuickPay = [];
-        
+        const awaitingConfirmation = [];
+
         for (const p of allParticipants) {
-            const hasPaid = paidParticipantIds.has(p.id);
-            const isJustified = justifiedIds.has(p.id);
-            
-            p.status = hasPaid ? 'paid' : (isJustified ? 'justified' : 'pending');
-            
+            const monthly = monthlyMap.get(p.id) || null;
+            const hasPaid = paidParticipantIds.has(p.id) || monthly?.status === 'paid';
+            const isJustified = justificationMap.has(p.id) || monthly?.status === 'justified';
+            const isAwaiting = !hasPaid && !isJustified && monthly?.status === 'awaiting_confirmation';
+
+            p.status = hasPaid
+                ? 'paid'
+                : (isJustified ? 'justified' : (isAwaiting ? 'awaiting_confirmation' : 'pending'));
+            p.amountPaid = paidTotals.get(p.id) || Number(monthly?.amountPaid || 0);
+            p.amountExpected = Number(monthly?.amountExpected || p.amountDue || 0);
+            p.justificationReason = justificationMap.get(p.id) || monthly?.justificationReason || '';
+            p.monthlyStatusSource = monthly?.source || null;
+
+            if (isAwaiting) {
+                awaitingConfirmation.push(p);
+            }
+
             if (p.status === 'pending') {
                 debtors.push(p);
                 pendingForQuickPay.push(p);
             }
         }
 
+        const totalCollected = Number(totalRow.total || 0);
+        const totalPurchases = Number(purchasesRow.total || 0);
+
         return {
             month: {
-                label: targetDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }),
+                label: targetDate.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }),
                 value: monthYearStr,
-                totalCollected: totalRow.total || 0,
-                totalPurchases: purchasesRow.total || 0,
-                netBalance: (totalRow.total || 0) - (purchasesRow.total || 0),
+                totalCollected,
+                totalPurchases,
+                carryOver,
+                totalAvailable: carryOver + totalCollected,
+                netBalance: carryOver + totalCollected - totalPurchases,
                 payments: totalRow.count || 0
             },
             paidRanking: paidRanking.slice(0, 8),
@@ -874,6 +1572,7 @@ class Database {
             purchases,
             debtors: debtors.sort((a, b) => b.amountDue - a.amountDue).slice(0, 8),
             pendingParticipants: pendingForQuickPay,
+            awaitingConfirmation,
             allParticipants
         };
     }

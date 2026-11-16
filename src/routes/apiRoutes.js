@@ -27,6 +27,8 @@ router.put('/purchases/:id', asyncHandler(financialController.updatePurchase));
 router.delete('/purchases/:id', asyncHandler(financialController.deletePurchase));
 
 router.post('/justifications', asyncHandler(financialController.toggleJustification));
+router.get('/monthly-status', asyncHandler(financialController.listMonthlyStatus));
+router.put('/monthly-status', asyncHandler(financialController.setMonthlyStatus));
 
 router.get('/bot/status', asyncHandler(botController.getStatus));
 router.post('/bot/start', asyncHandler(botController.startBot));
@@ -37,6 +39,7 @@ router.get('/bot/group-participants', asyncHandler(botController.listGroupPartic
 router.post('/bot/charge', asyncHandler(botController.sendIndividualCharge));
 router.post('/bot/campaign', asyncHandler(botController.startCampaign));
 router.post('/bot/report', asyncHandler(botController.sendReport));
+router.post('/bot/sync-polls', asyncHandler(botController.syncPolls));
 router.post('/bot/clear-session', asyncHandler(botController.clearSession));
 
 router.get('/reminders', asyncHandler(reminderController.listReminders));

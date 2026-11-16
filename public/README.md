@@ -69,6 +69,9 @@ Gerencia o estado da aplicação e a renderização dinâmica.
 | `loadGroupContacts()` | Carrega contatos do grupo selecionado |
 | `importGroupContacts()` | Importa contatos como participantes |
 | `sendIndividualCharges()` | Dispara cobranças em lote |
+| `quickPay(id)` | Registra pagamento manual e atualiza o status do mês |
+| `toggleJustify(id)` | Justifica/remove justificativa com motivo |
+| `markPaid(id)` / `markPending(id)` | Edição manual do status mensal |
 
 ### Eventos
 

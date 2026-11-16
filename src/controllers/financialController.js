@@ -39,8 +39,17 @@ async function deletePurchase(request, response) {
 }
 
 async function toggleJustification(request, response) {
-    const { participantId, monthYear } = request.body;
-    response.json(await financialService.toggleJustification(participantId, monthYear));
+    const { participantId, monthYear, reason } = request.body;
+    response.json(await financialService.toggleJustification(participantId, monthYear, reason));
+}
+
+async function setMonthlyStatus(request, response) {
+    response.json(await financialService.setMonthlyStatus(request.body));
+}
+
+async function listMonthlyStatus(request, response) {
+    const month = request.query.month || new Date().toISOString().slice(0, 7);
+    response.json(await financialService.listMonthlyStatus(month));
 }
 
 module.exports = {
@@ -52,5 +61,7 @@ module.exports = {
     getPurchases,
     updatePurchase,
     deletePurchase,
-    toggleJustification
+    toggleJustification,
+    setMonthlyStatus,
+    listMonthlyStatus
 };

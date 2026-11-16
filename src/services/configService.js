@@ -18,7 +18,9 @@ async function getInitialConfig() {
             pixChave: settings.pixChave || botConfig.pix.chave,
             pixCopiaCola: settings.pixCopiaCola || botConfig.pix.copiaCola,
             maxOpcoesPorEnquete: botConfig.maxOpcoesPorEnquete,
-            valoresContribuicao: botConfig.valoresContribuicao
+            valoresContribuicao: botConfig.valoresContribuicao,
+            diasCobranca: botConfig.diasCobranca,
+            horarioCobranca: botConfig.horarioCobranca
         },
         participants,
         campaigns,

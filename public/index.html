@@ -79,7 +79,7 @@
                     <div class="metric-info">
                         <span>Saldo Líquido</span>
                         <strong id="monthBalance">R$ 0,00</strong>
-                        <small>Disponível do mês</small>
+                        <small id="monthCarryOver">Sobra de meses anteriores: R$ 0,00</small>
                     </div>
                 </article>
                 <article class="metric-card glass-panel alert">
@@ -258,7 +258,7 @@
                         </div>
                         <button type="submit" class="primary action-btn"><i class="ph ph-paper-plane-right"></i> Enviar</button>
                     </div>
-                    <p class="muted">A cobrança automática ocorre todo dia 10 e 15. Use isto para forçar envio agora.</p>
+                    <p class="muted">A cobrança automática ocorre nos dias e no horário configurados (padrão: dias 10 e 15 às 08:00). Antes de cobrar, o bot avisa o grupo marcando todos. Use isto para forçar envio agora.</p>
                     <div class="input-group">
                         <label>
                             Destinatário
@@ -280,7 +280,11 @@
                         </div>
                         <button id="btnSendReport" class="primary action-btn"><i class="ph ph-share-network"></i> Enviar no Grupo</button>
                     </div>
-                    <p class="muted">Gera e envia o resumo financeiro deste mês no grupo alvo configurado (Arrecadado, Compras, Saldo e Devedores).</p>
+                    <p class="muted">Gera e envia o resumo financeiro deste mês no grupo alvo configurado (Arrecadado, sobra anterior, Compras, Saldo e Devedores).</p>
+                    <div class="button-row">
+                        <button id="btnSyncPolls" class="glass-btn action-btn"><i class="ph ph-arrows-clockwise"></i> Sincronizar enquetes</button>
+                    </div>
+                    <p class="muted">O bot lê as enquetes automaticamente. Use este botão se alguém votou enquanto o WhatsApp estava desconectado.</p>
                 </section>
             </section>
 
@@ -581,6 +585,29 @@
                             </label>
                         </div>
                     </div>
+
+                    <div class="inline-fields">
+                        <div class="input-group">
+                            <label>
+                                Dias da cobrança automática
+                                <div class="input-wrapper">
+                                    <i class="ph ph-calendar-dots"></i>
+                                    <input id="diasCobranca" name="diasCobranca" type="text" placeholder="10,15">
+                                </div>
+                            </label>
+                        </div>
+
+                        <div class="input-group">
+                            <label>
+                                Horário da cobrança
+                                <div class="input-wrapper">
+                                    <i class="ph ph-alarm"></i>
+                                    <input id="horarioCobranca" name="horarioCobranca" type="time" value="08:00">
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    <p class="muted">Dias separados por vírgula. No horário definido, o bot avisa o grupo marcando todos e envia a cobrança individual com a enquete de valores. Comandos no chat consigo mesmo: <strong>registrar compra</strong>, <strong>registrar pagamento</strong>, <strong>registrar justificativa</strong>, <strong>adicionar pessoa</strong>, <strong>retirar pessoa</strong> e <strong>status</strong>.</p>
                 </form>
             </section>
         </main>

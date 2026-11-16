@@ -5,6 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
 const defaultConfig = require('../config/defaultConfig');
+const db = require('../db/database');
+const commandService = require('./commandService');
 
 class ColetaCopaBot {
     constructor(options = {}) {
@@ -29,6 +31,10 @@ class ColetaCopaBot {
         this.lastError = null;
         this.logs = [];
         this.statusText = 'parado';
+        this._outgoingMessageIds = new Set();
+        this._processedMessageIds = new Set();
+        this._pollSyncTimer = null;
+        this._pollSyncRunning = false;
 
         console.log(`[BOT] Criando client com headless=${this.headless}`);
         this._createClient();
@@ -126,6 +132,8 @@ class ColetaCopaBot {
             this.statusText = 'conectado';
             console.log('[BOT_EVENT] Status atualizado para conectado');
 
+            this._startPollSync();
+
             if (this.autoStartCampaign) {
                 console.log('[BOT_EVENT] autoStartCampaign ativo, iniciando processo...');
                 this.startProcess();
@@ -168,6 +176,59 @@ class ColetaCopaBot {
                 this.statusText = 'carregando';
             }
         });
+
+        // Votos das enquetes (cobranca e confirmacao de pagamento).
+        this.client.on('vote_update', (vote) => {
+            this._onVoteUpdate(vote).catch(error => {
+                this.log(`Erro ao processar voto de enquete: ${error.message}`, 'error');
+            });
+        });
+
+        // Mensagens recebidas: usadas para capturar o motivo da ausencia,
+        // valor personalizado e valor pago quando o bot pergunta no privado.
+        this.client.on('message', (message) => {
+            this._onIncomingMessage(message).catch(error => {
+                this.log(`Erro ao processar mensagem recebida: ${error.message}`, 'error');
+            });
+        });
+
+        // Mensagens criadas pela propria conta. O chat "voce mesmo" e usado
+        // como central de comandos (registrar compra, pagamento, etc.).
+        this.client.on('message_create', (message) => {
+            this._onMessageCreate(message).catch(error => {
+                this.log(`Erro ao processar comando no chat pessoal: ${error.message}`, 'error');
+            });
+        });
+    }
+
+    _startPollSync() {
+        if (this._pollSyncTimer) {
+            clearInterval(this._pollSyncTimer);
+        }
+        this._pollSyncTimer = setInterval(() => {
+            this.syncOpenPolls().catch(error => {
+                this.log(`Erro ao sincronizar enquetes: ${error.message}`, 'warn');
+            });
+        }, 2 * 60 * 1000);
+
+        setTimeout(() => {
+            this.syncOpenPolls().catch(error => {
+                this.log(`Erro ao sincronizar enquetes: ${error.message}`, 'warn');
+            });
+        }, 10 * 1000);
+    }
+
+    async _send(chatId, content, options = {}) {
+        const message = await this.client.sendMessage(chatId, content, options);
+        const messageId = message?.id?._serialized;
+        if (messageId) {
+            this._outgoingMessageIds.add(messageId);
+            if (this._outgoingMessageIds.size > 500) {
+                const first = this._outgoingMessageIds.values().next().value;
+                this._outgoingMessageIds.delete(first);
+            }
+        }
+        return message;
     }
 
     log(message, level = 'info') {
@@ -801,7 +862,71 @@ class ColetaCopaBot {
         return `${digits}@c.us`;
     }
 
-    async enviarCobrancaIndividual({ number, name, amountDue, message }) {
+    _montarOpcoesCobranca() {
+        const valores = (this.config.valoresContribuicao || [])
+            .map(value => String(value || '').trim())
+            .filter(value => value && !/outro/i.test(value));
+        const opcoes = [];
+        const seen = new Set();
+        for (const valor of valores) {
+            const key = commandService.normalize(valor);
+            if (!seen.has(key)) {
+                seen.add(key);
+                opcoes.push(valor);
+            }
+        }
+        opcoes.push('Outro valor / insumos');
+        opcoes.push('Justificar ausência');
+        return opcoes.slice(0, 12);
+    }
+
+    _montarOpcoesValorPago(amount = 0) {
+        const opcoes = [];
+        const seen = new Set();
+        const add = (value) => {
+            const text = String(value || '').trim();
+            const key = commandService.normalize(text);
+            if (!text || seen.has(key)) return;
+            seen.add(key);
+            opcoes.push(text);
+        };
+
+        if (Number(amount) > 0) {
+            add(this.formatarValor(amount));
+        } else {
+            add('Insumos (sem valor)');
+        }
+
+        for (const valor of this.config.valoresContribuicao || []) {
+            if (!/outro/i.test(String(valor || ''))) add(valor);
+        }
+        add('Outro valor / insumos');
+        return opcoes.slice(0, 12);
+    }
+
+    _privateChatId(record) {
+        if (record?.chatId) return record.chatId;
+        if (record?.participantNumber) {
+            return this.normalizarDestinoWhatsapp(record.participantNumber);
+        }
+        return null;
+    }
+
+    _resolverOpcoesDoVoto(vote) {
+        const pollOptions = vote?.parentMessage?.pollOptions || [];
+        return (vote?.selectedOptions || []).map(option => {
+            if (option.name) return option.name;
+            const found = pollOptions.find(item => item.localId === option.localId);
+            return found ? found.name : `Opção ${Number(option.localId) + 1}`;
+        });
+    }
+
+    /**
+     * Envia a cobranca individual (texto + enquete de valores).
+     * A enquete fica registrada em `poll_tracking` para que o voto seja
+     * correlacionado ao participante e ao mes.
+     */
+    async enviarCobrancaIndividual({ number, name, amountDue, message, participantId, monthYear, monthLabel }) {
         console.log(`[BOT] enviarCobrancaIndividual para ${number} (${name}) valor=${amountDue}`);
         if (!this.isReady) {
             console.log('[BOT] enviarCobrancaIndividual ERRO: WhatsApp nao esta pronto');
@@ -812,15 +937,548 @@ class ColetaCopaBot {
         const nome = String(name || 'tudo bem?').trim();
         const valor = Number(amountDue || 0);
         const valorTexto = valor > 0 ? this.formatarValor(valor) : 'sua contribuicao pendente';
-        const textoBase = message || `Ola, ${nome}! Passando para lembrar da contribuicao da coleta FabLab.\n\nObrigado por ajudar a manter a copa abastecida.`;
+        const mes = monthLabel || monthYear || new Date().toISOString().slice(0, 7);
+        const textoBase = message || `Ola, ${nome}! Passando para lembrar da contribuicao da coleta FabLab deste mes (${mes}).\n\nValor de referencia: ${valorTexto}.\n\nDepois de pagar, marque na enquete abaixo o valor que voce contribuiu. Se contribuiu com insumos ou valor diferente, escolha "Outro valor / insumos". Se nao puder contribuir este mes, escolha "Justificar ausencia" e informe o motivo.`;
         const temPix = textoBase.toLowerCase().includes('pix');
         const texto = temPix
             ? textoBase
-            : `${textoBase}\n\nPIX: ${this.config.pix.chave}`;
+            : `${textoBase}\n\nPIX: ${this.config.pix.chave}\n${this.config.pix.copiaCola || ''}`.trim();
 
         console.log(`[BOT] Enviando mensagem para ${destino}...`);
-        await this.client.sendMessage(destino, texto);
-        console.log('[BOT] Mensagem enviada');
+        await this._send(destino, texto);
+
+        let participant = null;
+        if (participantId) {
+            participant = await db.getParticipant(participantId);
+        }
+        if (!participant) {
+            participant = await db.findParticipantByWhatsapp(number);
+        }
+
+        const opcoes = this._montarOpcoesCobranca();
+        const titulo = `COBRANCA ${mes} - ${nome}`.slice(0, 200);
+        const poll = new Poll(titulo, opcoes, { allowMultipleAnswers: false });
+        let pollMessage = null;
+        try {
+            pollMessage = await this._send(destino, poll);
+        } catch (error) {
+            this.log(`Falha ao enviar enquete de valores para ${nome}: ${error.message}`, 'warn');
+            const flowKey = `charge:${participant ? participant.id : destino}:${monthYear || new Date().toISOString().slice(0, 7)}:${Date.now()}`;
+            const fallback = await db.createPollTracking({
+                messageId: `manual:${destino}:${Date.now()}`,
+                chatId: destino,
+                participantId: participant ? participant.id : null,
+                participantNumber: String(number).replace(/\D/g, ''),
+                monthYear: monthYear || new Date().toISOString().slice(0, 7),
+                kind: 'charge_value',
+                flowKey,
+                status: 'answered',
+                selectedOption: 'resposta_manual'
+            });
+            await db.setBotState({
+                chatId: destino,
+                participantId: participant ? participant.id : null,
+                monthYear: monthYear || new Date().toISOString().slice(0, 7),
+                action: 'awaiting_custom_amount',
+                payload: { flowKey, pollId: fallback.id }
+            });
+            await this._send(destino, 'Nao consegui enviar a enquete. Responda esta mensagem com o valor contribuido (ex: 20,00) ou descreva os insumos entregues.');
+            return;
+        }
+
+        const messageId = pollMessage?.id?._serialized;
+        if (messageId) {
+            const flowKey = `charge:${participant ? participant.id : destino}:${monthYear || new Date().toISOString().slice(0, 7)}:${Date.now()}`;
+            await db.createPollTracking({
+                messageId,
+                chatId: destino,
+                participantId: participant ? participant.id : null,
+                participantNumber: String(number).replace(/\D/g, ''),
+                monthYear: monthYear || new Date().toISOString().slice(0, 7),
+                kind: 'charge_value',
+                flowKey,
+                status: 'open'
+            });
+        }
+        console.log('[BOT] Mensagem e enquete enviadas');
+    }
+
+    /**
+     * Avisa o grupo antes da cobranca, mencionando todos os participantes.
+     */
+    async avisarCobrancaNoGrupo({ pending = [], monthYear, monthLabel } = {}) {
+        if (!this.isReady) {
+            throw new Error('WhatsApp ainda nao esta pronto.');
+        }
+        const chatId = await this._resolveGroupId();
+        if (!chatId) {
+            throw new Error(`Grupo "${this.config.grupoAlvo}" nao encontrado para o aviso de cobranca.`);
+        }
+
+        const mes = monthLabel || monthYear || new Date().toISOString().slice(0, 7);
+        const lista = pending.length
+            ? pending.slice(0, 40).map(p => `- ${p.name}${Number(p.amountDue || 0) > 0 ? ` (${this.formatarValor(p.amountDue)})` : ''}`).join('\n')
+            : 'Todos ja estao em dia. Obrigado!';
+
+        const texto = `🔔 *COBRANCA DA COPA - ${mes}*\n\n@todos\n\nAtencao, pessoal! Vou iniciar agora a cobranca individual no privado. Cada pessoa recebera a chave PIX e a enquete para marcar o valor contribuido.\n\n*Pendencias deste mes (${pending.length}):*\n${lista}\n\nAssim que pagar, marque o valor na enquete. Se contribuiu com insumos ou valor diferente, escolha *Outro valor / insumos*. Se nao puder contribuir, escolha *Justificar ausencia* e informe o motivo.\n\n_Equipe Copa FabLab_`;
+
+        let participants = [];
+        try {
+            participants = await this.listarParticipantesGrupo(chatId);
+        } catch (error) {
+            this.log(`Nao foi possivel listar participantes para marcar todos: ${error.message}`, 'warn');
+        }
+        const mentions = participants.map(p => p.id).filter(Boolean);
+
+        try {
+            await this._send(chatId, texto, {
+                mentions,
+                groupMentions: [{ subject: 'todos', id: chatId }]
+            });
+        } catch (error) {
+            this.log(`Envio com mencao falhou, reenviando sem mencao: ${error.message}`, 'warn');
+            await this._send(chatId, texto.replace('@todos\n\n', ''));
+        }
+        console.log(`[BOT] Aviso de cobranca enviado ao grupo ${chatId} mencionando ${mentions.length} participantes.`);
+    }
+
+    async _onVoteUpdate(vote) {
+        const messageId = vote?.parentMessage?.id?._serialized;
+        if (!messageId) return;
+        const record = await db.getPollTrackingByMessageId(messageId);
+        if (!record) return;
+        const options = this._resolverOpcoesDoVoto(vote);
+        if (!options.length) return;
+        await this._processPollVote(record, options);
+    }
+
+    async _processPollVote(record, optionNames) {
+        if (!record || record.status === 'completed' || record.status === 'cancelled') {
+            return;
+        }
+
+        if (record.kind === 'charge_value') {
+            if (record.status !== 'open') return;
+            await this._handleChargeValue(record, optionNames);
+            return;
+        }
+
+        if (record.kind === 'payment_confirmed') {
+            if (record.status === 'yes' || record.status === 'no') return;
+            await this._handlePaymentConfirmed(record, optionNames[0]);
+            return;
+        }
+
+        if (record.kind === 'payment_amount') {
+            if (record.status === 'answered') return;
+            await this._handlePaymentAmount(record, optionNames[0]);
+        }
+    }
+
+    async _handleChargeValue(record, optionNames) {
+        const option = String(optionNames[0] || '').trim();
+        const normalized = commandService.normalize(option);
+        const chatId = this._privateChatId(record);
+        if (!chatId) return;
+
+        await db.updatePollTracking(record.id, {
+            selected_option: option,
+            status: 'answered'
+        });
+
+        if (normalized.includes('justificar')) {
+            await db.setBotState({
+                chatId,
+                participantId: record.participantId,
+                monthYear: record.monthYear,
+                action: 'awaiting_absence_reason',
+                payload: { flowKey: record.flowKey, pollId: record.id }
+            });
+            await this._send(chatId, `Entendido. Qual o motivo da sua ausencia neste mes (${record.monthYear})?\n\nResponda esta mensagem com o motivo. Ele ficara registrado na lista de arrecadacao.`);
+            return;
+        }
+
+        if (normalized.includes('outro') || normalized.includes('insumo')) {
+            await db.setBotState({
+                chatId,
+                participantId: record.participantId,
+                monthYear: record.monthYear,
+                action: 'awaiting_custom_amount',
+                payload: { flowKey: record.flowKey, pollId: record.id }
+            });
+            await this._send(chatId, 'Voce escolheu outro valor ou contribuicao com insumos.\n\nResponda esta mensagem com o valor contribuido (ex: 25,00) e, se quiser, descreva os insumos. Se contribuiu apenas com insumos, descreva o que levou.');
+            return;
+        }
+
+        const amount = commandService.parseAmount(option);
+        if (!amount || amount <= 0) {
+            await db.setBotState({
+                chatId,
+                participantId: record.participantId,
+                monthYear: record.monthYear,
+                action: 'awaiting_custom_amount',
+                payload: { flowKey: record.flowKey, pollId: record.id }
+            });
+            await this._send(chatId, `Nao consegui identificar o valor de "${option}". Responda esta mensagem com o valor contribuido (ex: 20,00).`);
+            return;
+        }
+
+        await this._startPaymentConfirmation(record, amount, option, '');
+    }
+
+    async _startPaymentConfirmation(record, amount, selectedLabel, note = '') {
+        const chatId = this._privateChatId(record);
+        if (!chatId) return;
+
+        const participant = record.participantId ? await db.getParticipant(record.participantId) : null;
+        const monthYear = record.monthYear;
+        const flowKey = record.flowKey;
+        const valor = Number(amount) || 0;
+
+        await db.updatePollTracking(record.id, {
+            status: 'awaiting_confirmation',
+            amount: valor,
+            note: note || null
+        });
+
+        const current = participant ? await db.getMonthlyStatus(participant.id, monthYear) : null;
+        if (participant && (!current || !['paid', 'justified'].includes(current.status))) {
+            await db.upsertMonthlyStatus({
+                participantId: participant.id,
+                monthYear,
+                status: 'awaiting_confirmation',
+                amountPaid: 0,
+                amountExpected: valor,
+                note: note || '',
+                source: 'whatsapp_enquete'
+            });
+        }
+
+        const resumo = valor > 0
+            ? `Voce marcou *${selectedLabel || this.formatarValor(valor)}*.\n\nAgora preciso confirmar: o pagamento ja foi realizado?`
+            : `Voce marcou *${selectedLabel || 'insumos'}*.\n\nConfirme abaixo a entrega/contribuicao.`;
+
+        await this._send(chatId, `${resumo}\n\nResponda as duas enquetes abaixo. A lista de arrecadacao so sera atualizada como *pago* depois que voce confirmar o pagamento.`);
+
+        const confirmOptions = ['Sim, já paguei', 'Ainda não paguei'];
+        const confirmPoll = new Poll(`Pagamento realizado? - ${monthYear}`, confirmOptions, { allowMultipleAnswers: false });
+        try {
+            const confirmMessage = await this._send(chatId, confirmPoll);
+            if (confirmMessage?.id?._serialized) {
+                await db.createPollTracking({
+                    messageId: confirmMessage.id._serialized,
+                    chatId,
+                    participantId: record.participantId,
+                    participantNumber: record.participantNumber,
+                    monthYear,
+                    kind: 'payment_confirmed',
+                    flowKey,
+                    status: 'open',
+                    amount: valor
+                });
+            }
+        } catch (error) {
+            this.log(`Falha ao enviar enquete de confirmacao para ${participant?.name || chatId}: ${error.message}`, 'warn');
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        const amountOptions = this._montarOpcoesValorPago(valor);
+        const amountPoll = new Poll(`Qual valor voce pagou? - ${monthYear}`, amountOptions, { allowMultipleAnswers: false });
+        try {
+            const amountMessage = await this._send(chatId, amountPoll);
+            if (amountMessage?.id?._serialized) {
+                await db.createPollTracking({
+                    messageId: amountMessage.id._serialized,
+                    chatId,
+                    participantId: record.participantId,
+                    participantNumber: record.participantNumber,
+                    monthYear,
+                    kind: 'payment_amount',
+                    flowKey,
+                    status: 'open',
+                    amount: valor,
+                    note: note || null
+                });
+            }
+        } catch (error) {
+            this.log(`Falha ao enviar enquete de valor pago para ${participant?.name || chatId}: ${error.message}`, 'warn');
+        }
+    }
+
+    async _handlePaymentConfirmed(record, option) {
+        const normalized = commandService.normalize(option);
+        const yes = normalized.startsWith('sim') || normalized.includes('paguei') || normalized.includes('realizado');
+        const selection = yes ? 'Sim, já paguei' : 'Ainda não paguei';
+        await db.updatePollTracking(record.id, {
+            status: yes ? 'yes' : 'no',
+            selected_option: selection
+        });
+
+        if (!yes) {
+            const chatId = this._privateChatId(record);
+            if (chatId) {
+                await this._send(chatId, 'Sem problemas. Assim que o pagamento for feito, marque novamente a enquete *Pagamento realizado?* com a opcao *Sim, já paguei* para que eu atualize sua lista.');
+            }
+            return;
+        }
+
+        await this._maybeConfirmPayment(record.flowKey);
+    }
+
+    async _handlePaymentAmount(record, option) {
+        const normalized = commandService.normalize(option);
+        const chatId = this._privateChatId(record);
+
+        if (normalized.includes('outro')) {
+            await db.updatePollTracking(record.id, {
+                status: 'awaiting_amount',
+                selected_option: option
+            });
+            if (chatId) {
+                await db.setBotState({
+                    chatId,
+                    participantId: record.participantId,
+                    monthYear: record.monthYear,
+                    action: 'awaiting_paid_amount',
+                    payload: { flowKey: record.flowKey, pollId: record.id }
+                });
+                await this._send(chatId, 'Qual foi o valor pago? Responda esta mensagem apenas com o valor (ex: 22,50).');
+            }
+            return;
+        }
+
+        let amount = commandService.parseAmount(option);
+        let note = '';
+        if (normalized.includes('insumo') || normalized.includes('sem valor')) {
+            amount = 0;
+            note = option;
+        }
+        if (amount === null) {
+            if (chatId) {
+                await db.setBotState({
+                    chatId,
+                    participantId: record.participantId,
+                    monthYear: record.monthYear,
+                    action: 'awaiting_paid_amount',
+                    payload: { flowKey: record.flowKey, pollId: record.id }
+                });
+                await this._send(chatId, `Nao consegui identificar o valor de "${option}". Responda apenas com o valor pago (ex: 20,00).`);
+            }
+            return;
+        }
+
+        await db.updatePollTracking(record.id, {
+            status: 'answered',
+            selected_option: option,
+            amount,
+            note: note || null
+        });
+        await this._maybeConfirmPayment(record.flowKey);
+    }
+
+    async _maybeConfirmPayment(flowKey) {
+        const rows = await db.getPollsByFlow(flowKey);
+        if (!rows.length) return;
+        if (rows.every(row => row.status === 'completed')) return;
+
+        const confirm = rows.find(row => row.kind === 'payment_confirmed');
+        const amountRow = rows.find(row => row.kind === 'payment_amount');
+        if (!confirm || confirm.status !== 'yes') return;
+        if (!amountRow || amountRow.status !== 'answered') return;
+
+        const reference = `poll:${flowKey}`;
+        const existing = await db.getPaymentByReference(reference);
+        const participant = confirm.participantId ? await db.getParticipant(confirm.participantId) : null;
+        const amount = Number(amountRow.amount || 0);
+
+        if (!existing && participant) {
+            const now = new Date().toISOString();
+            if (amount > 0) {
+                await db.createPayment({
+                    participantId: participant.id,
+                    participantName: participant.name,
+                    amount,
+                    paidAt: now,
+                    source: 'whatsapp_enquete',
+                    reference
+                });
+            } else {
+                await db.upsertMonthlyStatus({
+                    participantId: participant.id,
+                    monthYear: confirm.monthYear,
+                    status: 'paid',
+                    amountPaid: 0,
+                    amountExpected: 0,
+                    note: amountRow.note || 'Contribuicao em insumos',
+                    source: 'whatsapp_enquete',
+                    confirmedAt: now
+                });
+            }
+        }
+
+        for (const row of rows) {
+            await db.updatePollTracking(row.id, { status: 'completed' });
+        }
+
+        const chatId = this._privateChatId(confirm);
+        if (chatId) {
+            await db.clearBotState(chatId);
+            const resumoValor = amount > 0 ? this.formatarValor(amount) : 'contribuicao em insumos';
+            await this._send(chatId, `✅ *Pagamento confirmado!*\n\n${participant ? participant.name : 'Contribuicao'}: ${resumoValor} (${confirm.monthYear}).\nSua lista de arrecadacao foi atualizada para *PAGO*. Obrigado! 💚`);
+        }
+        console.log(`[BOT] Pagamento confirmado via enquete: ${participant?.name || confirm.participantNumber} ${amount}`);
+    }
+
+    async _onIncomingMessage(message) {
+        if (!message || message.isStatus) return;
+        if (message.fromMe) {
+            if (this._isSelfChat(message)) {
+                await this._onMessageCreate(message);
+            }
+            return;
+        }
+        const chatId = message.from;
+        if (!chatId || chatId.endsWith('@g.us')) return;
+
+        const state = await db.getBotState(chatId);
+        if (!state) return;
+
+        const body = String(message.body || '').trim();
+        if (!body) return;
+
+        if (state.action === 'awaiting_absence_reason') {
+            const reason = body;
+            await db.setJustification(state.participantId, state.monthYear, reason, 'whatsapp_enquete');
+            await db.clearBotState(chatId);
+            if (state.payload?.flowKey) {
+                const rows = await db.getPollsByFlow(state.payload.flowKey);
+                for (const row of rows) {
+                    await db.updatePollTracking(row.id, { status: 'completed' });
+                }
+            }
+            await this._send(chatId, `✅ *Justificativa registrada* (${state.monthYear}):\n${reason}\n\nSua lista de arrecadacao foi atualizada para *JUSTIFICADO*. Obrigado por avisar!`);
+            return;
+        }
+
+        if (state.action === 'awaiting_custom_amount') {
+            const record = state.payload?.pollId ? await db.getPollTracking(state.payload.pollId) : null;
+            if (!record) {
+                await db.clearBotState(chatId);
+                return;
+            }
+            const amount = commandService.parseAmount(body);
+            await db.clearBotState(chatId);
+            if (amount && amount > 0) {
+                await this._startPaymentConfirmation(record, amount, this.formatarValor(amount), body);
+            } else {
+                await this._startPaymentConfirmation(record, 0, 'Insumos', body);
+            }
+            return;
+        }
+
+        if (state.action === 'awaiting_paid_amount') {
+            const record = state.payload?.pollId ? await db.getPollTracking(state.payload.pollId) : null;
+            const amount = commandService.parseAmount(body);
+            if (!record || amount === null) {
+                await this._send(chatId, 'Nao consegui identificar o valor. Responda apenas com o valor pago (ex: 20,00).');
+                return;
+            }
+            await db.clearBotState(chatId);
+            await db.updatePollTracking(record.id, {
+                status: 'answered',
+                selected_option: this.formatarValor(amount),
+                amount
+            });
+            await this._maybeConfirmPayment(record.flowKey);
+        }
+    }
+
+    _getSelfId() {
+        const wid = this.client?.info?.wid;
+        if (!wid) return null;
+        return wid._serialized || (wid.user ? `${wid.user}@c.us` : null);
+    }
+
+    _isSelfChat(message) {
+        if (!message) return false;
+        if (message.fromMe && message.from && message.from === message.to) return true;
+        const selfId = this._getSelfId();
+        if (!selfId) return false;
+        const chatId = message.id?.remote || message.to || '';
+        return message.to === selfId || chatId === selfId;
+    }
+
+    async _onMessageCreate(message) {
+        if (!message || !message.fromMe) return;
+        if (!this._isSelfChat(message)) return;
+
+        const messageId = message.id?._serialized;
+        if (messageId && this._outgoingMessageIds.has(messageId)) return;
+        if (messageId && this._processedMessageIds.has(messageId)) return;
+
+        const body = String(message.body || '').trim();
+        if (!body || body.startsWith('🤖')) return;
+
+        if (messageId) {
+            this._processedMessageIds.add(messageId);
+            if (this._processedMessageIds.size > 500) {
+                const first = this._processedMessageIds.values().next().value;
+                this._processedMessageIds.delete(first);
+            }
+        }
+
+        const result = await commandService.execute(body, {
+            monthYear: new Date().toISOString().slice(0, 7),
+            source: 'whatsapp_comando'
+        });
+        if (!result.handled) return;
+
+        const target = message.to || this._getSelfId();
+        if (target) {
+            await this._send(target, `🤖 ${result.reply}`);
+        }
+    }
+
+    /**
+     * Le as enquetes abertas para recuperar votos que aconteceram enquanto o
+     * bot estava offline ou que nao geraram evento `vote_update`.
+     */
+    async syncOpenPolls() {
+        if (!this.isReady || this._pollSyncRunning) {
+            return { checked: 0, processed: 0 };
+        }
+        this._pollSyncRunning = true;
+        let processed = 0;
+        try {
+            const rows = await db.getOpenPolls(30);
+            for (const row of rows) {
+                if (!row.messageId) continue;
+                try {
+                    const votes = await this.client.getPollVotes(row.messageId);
+                    if (!votes.length) continue;
+                    const voterNumber = String(row.participantNumber || '').replace(/\D/g, '');
+                    const vote = votes.slice().reverse().find(v => {
+                        const digits = String(v.voter || '').replace(/\D/g, '');
+                        return voterNumber && digits && (digits.endsWith(voterNumber) || voterNumber.endsWith(digits));
+                    }) || votes[votes.length - 1];
+                    const options = this._resolverOpcoesDoVoto(vote);
+                    if (!options.length) continue;
+                    const fresh = await db.getPollTracking(row.id);
+                    await this._processPollVote(fresh, options);
+                    processed++;
+                } catch (error) {
+                    // Enquetes antigas podem nao existir mais no WhatsApp.
+                    this.log(`Nao foi possivel ler a enquete ${row.id}: ${error.message}`, 'warn');
+                }
+            }
+            if (processed > 0) {
+                this.log(`${processed} enquete(s) sincronizada(s) pelo WhatsApp.`);
+            }
+            return { checked: rows.length, processed };
+        } finally {
+            this._pollSyncRunning = false;
+        }
     }
 
     async _resolveGroupId(grupoAlvo = null) {
@@ -1034,6 +1692,10 @@ Vamos manter a copa abastecida!`);
 
     async fecharNavegador() {
         console.log('[BOT] fecharNavegador()');
+        if (this._pollSyncTimer) {
+            clearInterval(this._pollSyncTimer);
+            this._pollSyncTimer = null;
+        }
         try {
             await this.client.destroy();
             console.log('[BOT] Client destruido');

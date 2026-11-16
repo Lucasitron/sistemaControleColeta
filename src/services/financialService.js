@@ -32,12 +32,23 @@ async function deletePurchase(id) {
     return await db.deletePurchase(id);
 }
 
-async function toggleJustification(participantId, monthYear) {
+async function toggleJustification(participantId, monthYear, reason) {
     if (!participantId || !monthYear) {
         throw new Error('participantId e monthYear sao obrigatorios.');
     }
 
-    return await db.toggleJustification(participantId, monthYear);
+    return await db.toggleJustification(participantId, monthYear, reason);
+}
+
+async function setMonthlyStatus(data) {
+    if (!data || !data.participantId || !data.monthYear) {
+        throw new Error('participantId e monthYear sao obrigatorios.');
+    }
+    return await db.setMonthlyStatus(data);
+}
+
+async function listMonthlyStatus(monthYear) {
+    return await db.listMonthlyStatus(monthYear);
 }
 
 module.exports = {
@@ -49,5 +60,7 @@ module.exports = {
     getPurchases,
     updatePurchase,
     deletePurchase,
-    toggleJustification
+    toggleJustification,
+    setMonthlyStatus,
+    listMonthlyStatus
 };
