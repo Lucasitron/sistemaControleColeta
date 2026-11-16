@@ -100,6 +100,39 @@ function currency(value) {
     });
 }
 
+// Converte valores digitados livremente ("20", "20,00", "R$ 1.234,56")
+// para numero, aceitando tanto virgula quanto ponto como separador decimal.
+function parseAmountInput(value) {
+    let text = String(value ?? '')
+        .replace(/r\$/gi, '')
+        .replace(/\s/g, '')
+        .replace(/[^\d,.-]/g, '');
+    if (!text) return NaN;
+    const negative = text.startsWith('-');
+    text = text.replace(/-/g, '');
+    if (!text) return NaN;
+    if (text.includes(',')) {
+        text = text.replace(/\./g, '').replace(',', '.');
+    } else {
+        const parts = text.split('.');
+        if (parts.length > 2 || (parts.length === 2 && parts[1].length === 3)) {
+            text = parts.join('');
+        }
+    }
+    const amount = Number(text);
+    if (!Number.isFinite(amount)) return NaN;
+    return negative ? -amount : amount;
+}
+
+function amountInputValue(value) {
+    const amount = parseAmountInput(value);
+    if (!Number.isFinite(amount)) return '';
+    return amount.toLocaleString('pt-BR', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
+}
+
 function setStatus(status) {
     const badge = elements.statusBadge;
     badge.textContent = status.isReady ? 'conectado' : (status.status || 'desconhecido');
@@ -308,12 +341,10 @@ function renderPendingPayments() {
     }).filter(v => v > 0);
     if (!values.length) values.push(10); 
     
-    container.innerHTML = pending.map(p => {
+    const datalist = `<datalist id="quickValOptions">${values.map(v => `<option value="${amountInputValue(v)}"></option>`).join('')}</datalist>`;
+
+    container.innerHTML = datalist + pending.map(p => {
         const defaultVal = p.amountDue || values[0];
-        let options = values.map(v => `<option value="${v}" ${v==defaultVal?'selected':''}>${currency(v)}</option>`).join('');
-        if (!values.includes(defaultVal)) {
-            options = `<option value="${defaultVal}" selected>${currency(defaultVal)}</option>` + options;
-        }
 
         return `
         <article class="list-item" style="padding:12px; margin-bottom:8px;">
@@ -321,9 +352,7 @@ function renderPendingPayments() {
                 <strong>${escapeHtml(p.name)}</strong>
             </div>
             <div style="display:flex; gap:8px; align-items:center;">
-                <select id="quickVal_${p.id}" style="width: auto; padding: 6px; font-size: 0.9rem; border-radius:8px; background:rgba(0,0,0,0.3);">
-                    ${options}
-                </select>
+                <input id="quickVal_${p.id}" type="text" inputmode="decimal" list="quickValOptions" value="${amountInputValue(defaultVal)}" onfocus="this.select()" style="width: 96px; padding: 6px; font-size: 0.9rem; border-radius:8px; background:rgba(0,0,0,0.3);" title="Escolha um valor da lista ou digite outro" />
                 <button type="button" class="primary" style="padding: 6px 12px; border-radius:8px;" onclick="quickPay(${p.id})" title="Marcar como pago">
                     <i class="ph ph-check"></i>
                 </button>
@@ -336,7 +365,11 @@ function renderPendingPayments() {
 }
 
 window.quickPay = async function(participantId) {
-    const amount = document.querySelector('#quickVal_' + participantId).value;
+    const amount = parseAmountInput(document.querySelector('#quickVal_' + participantId).value);
+    if (!Number.isFinite(amount) || amount <= 0) {
+        showToast('Informe um valor válido para a arrecadação.');
+        return;
+    }
     try {
         await api('/api/payments', {
             method: 'POST',
